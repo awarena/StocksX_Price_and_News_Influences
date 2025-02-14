@@ -8,7 +8,7 @@ import pandas_ta as ta
 LAST_UPDATE_FILE = "./last_update.txt"
 STOCKS_DIR = "./stocks"
 ETFS_DIR = "./etfs"
-METADATA_FILE = "symbols_valid_meta.csv"
+METADATA_FILE = "./symbols_valid_meta.csv"
 
 # Ensure directories exist
 os.makedirs(STOCKS_DIR, exist_ok=True)
