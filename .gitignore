@@ -2,3 +2,4 @@ CSVs/
 stocks.db
 logs/
 alphavantage_key.txt
+parquets/
