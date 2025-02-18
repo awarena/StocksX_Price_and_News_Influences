@@ -5,8 +5,8 @@ import yfinance as yf
 import datetime
 import pandas_ta as ta
 
-DB_PATH = "E:/Projects/StocksX_Price_and_News_Influences/Raw_Data/stocks.db"
-LOG_PATH = "E:/Projects/AutoRunStockUpdater/logs/update_log.txt"
+DB_PATH = "./stocks.db"
+LOG_PATH = "./logs/update_log.txt"
 
 def log_message(message):
     with open(LOG_PATH, "a") as log_file:

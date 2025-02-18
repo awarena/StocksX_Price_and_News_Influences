@@ -18,12 +18,12 @@ spark = SparkSession.builder \
     .getOrCreate()
 
 # Paths to Parquet files
-TRADING_DAYS_PATH = "E:/Projects/StocksX_Price_and_News_Influences/Raw_Data/parquets/trading_days.parquet"
-SYMBOLS_PATH = "E:/Projects/StocksX_Price_and_News_Influences/Raw_Data/parquets/symbols.parquet"
-STOCK_PRICES_PATH = "E:/Projects/StocksX_Price_and_News_Influences/Raw_Data/parquets/stock_prices.parquet"
-ETF_PRICES_PATH = "E:/Projects/StocksX_Price_and_News_Influences/Raw_Data/parquets/etf_prices.parquet"
-METADATA_PATH = "E:/Projects/StocksX_Price_and_News_Influences/Raw_Data/parquets/metadata.parquet"
-LOG_PATH = "E:/Projects/AutoRunStockUpdater/logs/update_log.txt"
+TRADING_DAYS_PATH = "./parquets/trading_days.parquet"
+SYMBOLS_PATH = "./parquets/symbols.parquet"
+STOCK_PRICES_PATH = "./parquets/stock_prices.parquet"
+ETF_PRICES_PATH = "./parquets/etf_prices.parquet"
+METADATA_PATH = "./parquets/metadata.parquet"
+LOG_PATH = "./logs/update_log.txt"
 
 def log_message(message):
     # Log rotation
