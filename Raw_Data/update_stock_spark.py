@@ -9,6 +9,9 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, lit, when
 from pyspark.sql.types import DateType
 
+os.environ["PYSPARK_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
+os.environ["PYSPARK_DRIVER_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
+
 # Initialize Spark session
 spark = SparkSession.builder \
     .appName("StocksX_Price_and_News_Influences") \
