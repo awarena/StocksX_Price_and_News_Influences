@@ -8,6 +8,7 @@ import pandas_market_calendars as mcal
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, lit, when
 from pyspark.sql.types import DateType
+from pyspark.sql.types import StructType, StructField, StringType, DateType, FloatType, IntegerType
 
 os.environ["PYSPARK_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
 os.environ["PYSPARK_DRIVER_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
@@ -25,6 +26,45 @@ ETF_PRICES_PATH = r"Raw_Data\parquets\etf_prices.parquet"
 METADATA_PATH = r"Raw_Data\parquets\metadata.parquet"
 LOG_PATH = r"Raw_Data\logs\update_log.txt"
 
+# Ensure the Parquet directory exists
+PARQUET_DIR = os.path.dirname(TRADING_DAYS_PATH)
+
+# Define schemas for the DataFrames
+trading_days_schema = StructType([
+    StructField("date_id", IntegerType(), True),
+    StructField("trade_date", DateType(), True)
+])
+
+symbols_schema = StructType([
+    StructField("symbol_id", IntegerType(), True),
+    StructField("symbol", StringType(), True),
+    StructField("is_etf", StringType(), True),
+    StructField("last_update", DateType(), True)
+])
+
+stock_prices_schema = StructType([
+    StructField("symbol_id", IntegerType(), True),
+    StructField("date_id", IntegerType(), True),
+    StructField("open", FloatType(), True),
+    StructField("high", FloatType(), True),
+    StructField("low", FloatType(), True),
+    StructField("close", FloatType(), True),
+    StructField("volume", IntegerType(), True)
+])
+
+etf_prices_schema = stock_prices_schema
+
+metadata_schema = StructType([
+    StructField("symbol", StringType(), True),
+    StructField("security_name", StringType(), True),
+    StructField("market_category", StringType(), True),
+    StructField("is_etf", StringType(), True),
+    StructField("round_lot_size", IntegerType(), True)
+])
+
+if not os.path.exists(PARQUET_DIR):
+    os.makedirs(PARQUET_DIR)
+
 def log_message(message):
     # Log rotation
     if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > 1e6:
@@ -35,11 +75,17 @@ def log_message(message):
 
 # Load Parquet files into DataFrames
 def load_parquet_files():
-    trading_days_df = spark.read.parquet(TRADING_DAYS_PATH)
-    symbols_df = spark.read.parquet(SYMBOLS_PATH)
-    stock_prices_df = spark.read.parquet(STOCK_PRICES_PATH)
-    etf_prices_df = spark.read.parquet(ETF_PRICES_PATH)
-    metadata_df = spark.read.parquet(METADATA_PATH)
+    def load_parquet(path, schema):
+        if os.path.exists(path):
+            return spark.read.parquet(path)
+        else:
+            return spark.createDataFrame([], schema)  # Create an empty DataFrame with the defined schema
+
+    trading_days_df = load_parquet(TRADING_DAYS_PATH, trading_days_schema)
+    symbols_df = load_parquet(SYMBOLS_PATH, symbols_schema)
+    stock_prices_df = load_parquet(STOCK_PRICES_PATH, stock_prices_schema)
+    etf_prices_df = load_parquet(ETF_PRICES_PATH, etf_prices_schema)
+    metadata_df = load_parquet(METADATA_PATH, metadata_schema)
     return trading_days_df, symbols_df, stock_prices_df, etf_prices_df, metadata_df
 
 # Save DataFrames to Parquet files
