@@ -120,72 +120,95 @@ def is_trading_day(date):
     return not schedule.empty
 
 # Fetch and process stock/ETF data
-def fetch_data(symbol, is_etf=False, attempt=1, backoff=0):
+import concurrent.futures
+import threading
+import time
+import requests
+
+# Global variables for backoff strategy
+backoff_lock = threading.Lock()
+global_backoff = 0  # Shared across all threads
+yahoo_down = False  # Flag to track Yahoo Finance outage
+
+def fetch_data(symbol, is_etf=False, attempt=1):
+    global global_backoff, yahoo_down
+
+    with backoff_lock:
+        if global_backoff > 0:
+            log_message(f"Global backoff active. Waiting {global_backoff} seconds before retrying {symbol}...")
+            time.sleep(global_backoff)
+
+    if yahoo_down:
+        log_message(f"Yahoo Finance is down. Skipping {symbol} for now.")
+        return False  # Mark for retry later
+
     trading_days_df, symbols_df, stock_prices_df, etf_prices_df, metadata_df = load_parquet_files()
     last_update = get_last_update_date(symbol, symbols_df)
-    log_message(f"Last update date for {symbol}: {last_update}")
-    
+
     if last_update:
         last_update_date = datetime.datetime.strptime(last_update, "%Y-%m-%d").date()
         days_since_last_update = (datetime.date.today() - last_update_date).days
         period = f"{days_since_last_update}d"
     else:
         period = "max"
-    
+
     log_message(f"Fetching data for {symbol} with period {period}")
-    
+
     if not is_trading_day(datetime.date.today()):
         log_message(f"Market is closed today. Skipping data fetch for {symbol}.")
-        return
-    
+        return False  # Mark for retry later
+
     try:
         df = yf.download(symbol, period=period, interval="1d")
-        
-        if df.empty:
-            log_message(f"No new data found for {symbol}. Skipping...")
-            return
 
-        log_message(f"Data fetched for {symbol}: {df.head()}")
+        if df.empty:
+            log_message(f"No new data found for {symbol}. Possible rate limit.")
+            raise Exception("Empty DataFrame - Possible Rate Limit")  
+
         df.reset_index(inplace=True)
         df.columns = ["Date", "Open", "High", "Low", "Close", "Volume"]
-        df = df[df["Date"] > last_update] if last_update else df
-        
-        log_message(f"Filtered data for {symbol} after last update: {df.head()}")
-        log_message(f"Fetched {len(df)} rows of data for {symbol}")
         df["Date"] = pd.to_datetime(df["Date"]).dt.date
 
-        new_trading_days_df, new_symbols_df, new_stock_prices_df, new_etf_prices_df = insert_stock_data(df, symbol, is_etf, trading_days_df, symbols_df, stock_prices_df, etf_prices_df)
-        
-        if last_update and not is_data_complete(df, last_update_date):
-            log_message(f"Data for {last_update_date} is not complete. Retrying later.")
-            return
-        
-        symbols_df = symbols_df.withColumn("last_update", when(col("symbol") == symbol, lit(datetime.date.today())).otherwise(col("last_update")))
-        save_parquet_files(new_trading_days_df, new_symbols_df, new_stock_prices_df, new_etf_prices_df, spark.createDataFrame([], metadata_df.schema))
-        
+        insert_stock_data(df, symbol, is_etf, trading_days_df, symbols_df, stock_prices_df, etf_prices_df)
+        save_parquet_files(trading_days_df, symbols_df, stock_prices_df, etf_prices_df, metadata_df)
+
         log_message(f"{symbol} updated successfully.")
-        time.sleep(1.5)
-        
+        return True  # Success
+
+    except requests.exceptions.RequestException as e:
+        log_message(f"Network error while fetching {symbol}: {e}")
+        yahoo_down = True  # Mark Yahoo Finance as down
+        return False  # Retry later
+
     except Exception as e:
         log_message(f"Error downloading {symbol}: {e}")
 
         if "rate limit" in str(e).lower() or "too many requests" in str(e).lower():
-            backoff_delays = [3600, 7200, 86400]
-            if attempt <= 3:
-                log_message(f"Retrying {symbol} in 5 seconds (Attempt {attempt}/3)...")
-                time.sleep(5)
-                return fetch_data(symbol, is_etf, attempt + 1)
-            elif backoff < len(backoff_delays):
-                wait_time = backoff_delays[backoff]
-                log_message(f"Rate limit hit! Waiting {wait_time//3600} hours before retrying {symbol}...")
-                time.sleep(wait_time)
-                return fetch_data(symbol, is_etf, 1, backoff + 1)
-            else:
-                log_message(f"Skipping {symbol} after multiple failed attempts.")
-                return
+            with backoff_lock:
+                backoff_times = [60, 300, 3600, 10800]  # 1 min, 5 min, 1 hour, 3 hours
+                global_backoff = backoff_times[min(attempt - 1, len(backoff_times) - 1)]
+            log_message(f"Rate limit detected! Applying backoff: {global_backoff} seconds.")
+            return False  # Retry later
+        elif "yahoo" in str(e).lower() or "service unavailable" in str(e).lower():
+            yahoo_down = True  # Mark Yahoo Finance as down
+            return False  # Retry later
         else:
             log_message(f"Skipping {symbol} due to an error: {e}")
-            return
+            return None  # Permanent failure
+
+def check_yahoo_status():
+    """ Check if Yahoo Finance is back online """
+    global yahoo_down
+    test_symbol = "AAPL"
+    
+    try:
+        log_message("Checking Yahoo Finance availability...")
+        yf.download(test_symbol, period="1d", interval="1d")
+        yahoo_down = False
+        log_message("Yahoo Finance is back online!")
+    except Exception:
+        yahoo_down = True
+        log_message("Yahoo Finance is still down.")
 
 def download_all_stock_data():
     url = "http://www.nasdaqtrader.com/dynamic/SymDir/nasdaqtraded.txt"
@@ -199,30 +222,77 @@ def download_all_stock_data():
     stocks = valid_data[valid_data["ETF"] == "N"]
 
     valid_symbols = []
+    failed_symbols = []
 
-    print("\nDownloading Stocks...")
-    for _, row in stocks.iterrows():
-        symbol = row["Symbol"]
-        fetch_data(symbol, is_etf=False)
-        valid_symbols.append(row)
+    print("\nStarting multi-threaded stock data download...")
 
-    print("\nDownloading ETFs...")
-    for _, row in etfs.iterrows():
-        symbol = row["Symbol"]
-        fetch_data(symbol, is_etf=True)
-        valid_symbols.append(row)
+    def process_row(row, is_etf):
+        """ Helper function to fetch data and store the row """
+        result = fetch_data(row["Symbol"], is_etf)
+        if result is True:
+            return row  # Success
+        elif result is False:
+            failed_symbols.append(row)  # Add to retry list
+        return None  # Skip permanently failed rows
+
+    max_threads = 10
+    with concurrent.futures.ThreadPoolExecutor(max_threads) as executor:
+        stock_futures = {executor.submit(process_row, row, False): row for _, row in stocks.iterrows()}
+        etf_futures = {executor.submit(process_row, row, True): row for _, row in etfs.iterrows()}
+
+        for future in concurrent.futures.as_completed(stock_futures):
+            row = future.result()
+            if row:
+                valid_symbols.append(row)
+
+        for future in concurrent.futures.as_completed(etf_futures):
+            row = future.result()
+            if row:
+                valid_symbols.append(row)
+
+    # Retry failed downloads when Yahoo Finance is back
+    while failed_symbols:
+        log_message(f"Retrying {len(failed_symbols)} failed downloads after backoff...")
+
+        if yahoo_down:
+            check_yahoo_status()  # Periodically check if Yahoo Finance is back
+            time.sleep(1800)  # Wait 30 minutes before checking again
+            continue  # Skip retrying until Yahoo Finance is up
+
+        time.sleep(global_backoff)  # Wait before retrying
+        global_backoff = 0  # Reset after waiting
+
+        new_failed = []
+        with concurrent.futures.ThreadPoolExecutor(max_threads) as executor:
+            retry_futures = {executor.submit(process_row, row, row["ETF"] == "Y"): row for row in failed_symbols}
+            for future in concurrent.futures.as_completed(retry_futures):
+                row = future.result()
+                if row:
+                    valid_symbols.append(row)
+                else:
+                    new_failed.append(row)  # Still failed
+
+        failed_symbols = new_failed  # Update retry list
 
     valid_metadata_df = pd.DataFrame(valid_symbols)
     valid_metadata_df.to_csv("E:/Projects/StocksX_Price_and_News_Influences/Raw_Data/updated_metadata.csv", index=False)
     log_message("All downloads completed.")
 
+    # Update Spark metadata
     trading_days_df, symbols_df, stock_prices_df, etf_prices_df, metadata_df = load_parquet_files()
     metadata_df = metadata_df.filter(~col("symbol").isin(valid_metadata_df["Symbol"].tolist()))
+
     for _, row in valid_metadata_df.iterrows():
         new_row = spark.createDataFrame([(row["Symbol"], row["Security Name"], row["Market Category"], row["ETF"] == "Y", row["Round Lot Size"])],
                                         ["symbol", "security_name", "market_category", "is_etf", "round_lot_size"])
         metadata_df = metadata_df.union(new_row)
-    save_parquet_files(spark.createDataFrame([], trading_days_df.schema), spark.createDataFrame([], symbols_df.schema), spark.createDataFrame([], stock_prices_df.schema), spark.createDataFrame([], etf_prices_df.schema), metadata_df)
+
+    save_parquet_files(spark.createDataFrame([], trading_days_df.schema), 
+                       spark.createDataFrame([], symbols_df.schema), 
+                       spark.createDataFrame([], stock_prices_df.schema), 
+                       spark.createDataFrame([], etf_prices_df.schema), 
+                       metadata_df)
+
     log_message("Metadata updated in the database.")
 
 if __name__ == "__main__":
