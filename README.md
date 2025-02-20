@@ -13,4 +13,4 @@
 1. Open `update_stock_spark_module.py`.
 2. Set `os.environ["PYSPARK_PYTHON"]` and `os.environ["PYSPARK_DRIVER_PYTHON"]` to the path to your python.exe file inside the previously installed conda environment.
 3. Activate `tf270_stocks` environemnt.
-4. Run `update_stock_spark.py`.
+4. Run `update_stock_spark_module.py`.
