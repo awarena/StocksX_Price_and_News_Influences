@@ -37,8 +37,6 @@ class SparkConfig:
     arrow_enabled: bool = True
     shuffle_partitions: int = 200
     parallelism: int = 200
-    memory_fraction: float = 0.8
-    storage_fraction: float = 0.3
     executor_memory: str = "10g"
     driver_memory: str = "10g"
     garbage_collectors: Dict[str, str] = field(default_factory=lambda: {
@@ -71,9 +69,8 @@ class SparkManager:
                 .config("spark.sql.execution.arrow.pyspark.enabled", self.config.arrow_enabled)
                 .config("spark.sql.shuffle.partitions", self.config.shuffle_partitions)
                 .config("spark.default.parallelism", self.config.parallelism)
-                .config("spark.memory.fraction", self.config.memory_fraction)
-                .config("spark.memory.storageFraction", self.config.storage_fraction))
-            
+                .config("spark.executor.memory", self.config.executor_memory)
+                .config("spark.driver.memory", self.config.driver_memory))               
             for key, value in self.config.garbage_collectors.items():
                 builder = builder.config(key, value)
             
