@@ -2,7 +2,6 @@ from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 import os
 import pandas as pd
 import yfinance as yf
-import datetime
 from datetime import date
 import time
 from pyspark.sql import SparkSession
@@ -10,10 +9,9 @@ from pyspark.sql import functions as F
 from pyspark.sql import Window
 from pyspark.sql.types import StructType, StructField, StringType, DateType, FloatType, IntegerType
 import logging
-from abc import ABC, abstractmethod
 from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass, field
-from yfinance.exceptions import YFInvalidPeriodError
+from pandas_market_calendars import get_calendar
 
 os.environ["PYSPARK_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
 os.environ["PYSPARK_DRIVER_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
@@ -374,11 +372,18 @@ class StockDataManager:
         self.spark_manager.cleanup()
 
 def main():
-    manager = StockDataManager()
-    try:
-        manager.download_all_stock_data()
-    finally:
-        manager.cleanup()
+    # check if today is a trading day
+    calendar = get_calendar("NASDAQ")
+    today = date.today()
+    if not calendar.valid_days(start_date=today, end_date=today).size:
+        print("Today is not a trading day.")
+        return 0
+    else:
+        manager = StockDataManager()
+        try:
+            manager.download_all_stock_data()
+        finally:
+            manager.cleanup()
 
 if __name__ == "__main__":
     main()
