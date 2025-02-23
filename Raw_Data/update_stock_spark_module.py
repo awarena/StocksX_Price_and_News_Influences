@@ -254,12 +254,14 @@ class StockDataProcessor:
         self.fetcher = fetcher
         self.logger = logger
         self.config = config
+        self.first_time = False
 
     def process_symbol_batch(self, symbol_batch: List[Tuple[str, bool]]):
         """Process a batch of symbols using Spark's native parallelism"""
         symbol_df = self.spark.session.createDataFrame(symbol_batch, ["symbol", "is_etf"])
         last_update_df = self.data_store.dfs["last_update"]
-        
+        self.first_time = True if last_update_df.count() == 0 else False
+
         # Join symbol_df with last_update_df to get the last_update date for each symbol
         symbol_with_last_update_df = symbol_df.join(last_update_df, "symbol", "left_outer")
 
@@ -308,8 +310,11 @@ class StockDataProcessor:
         if price_data.count() > 0:
             self.data_store.write_dataframe(price_data, 'stock_prices')
         
-        if last_update_data.count() > 0:
-            self.data_store.accumulate_last_update(last_update_data)
+        if self.first_time and last_update_data.count() > 0:
+            self.data_store.write_dataframe(last_update_data, 'last_update')
+        else:
+            if last_update_data.count() > 0:
+                self.data_store.accumulate_last_update(last_update_data)
 
 class StockDataManager:
     """Main class that orchestrates the stock data operations"""
@@ -339,12 +344,11 @@ class StockDataManager:
             df = pd.read_csv(url, sep="|")
             df = df[df["Test Issue"] == "N"]
 
-            # Take only first 10 symbols for testing
-            # df = df.head(10)
+
+            df = df.head(5)
             
             symbols = (
-                [(symbol, 'N') for symbol in df[df["ETF"] == "N"]["NASDAQ Symbol"]] +
-                [(symbol, 'Y') for symbol in df[df["ETF"] == "Y"]["NASDAQ Symbol"]]
+                [(symbol, 'N') for symbol in df[df["ETF"] == "N"]["NASDAQ Symbol"]]
             )
             
             self.logger.info(f"Found {len(symbols)} total symbols to process")
