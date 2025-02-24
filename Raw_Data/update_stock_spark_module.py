@@ -311,7 +311,7 @@ class StockDataProcessor:
         if self.first_time and last_update_data.count() > 0:
             self.data_store.write_dataframe(last_update_data, 'last_update')
         else:
-            if last_update_data.count() > 0:
+            if price_data.count() > 0 and last_update_data.count() > 0:
                 self.data_store.accumulate_last_update(last_update_data)
 
 class StockDataManager:
