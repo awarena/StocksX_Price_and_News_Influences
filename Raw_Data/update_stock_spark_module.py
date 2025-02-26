@@ -153,6 +153,8 @@ class DataStore:
         path = f"{self.config.data_path}{name}.parquet"
         schema = getattr(self.schema, name)
         if os.path.exists(path):
+            if name == "last_update":
+                return self.spark.session.read.parquet(path).cache()
             return self.spark.session.read.parquet(path)
         return self.spark.session.createDataFrame([], schema)
 
@@ -194,7 +196,7 @@ class DataStore:
                               .drop("rank")
         
         # Write the deduplicated DataFrame to the last_update table
-        deduped_df.write.mode("overwrite").partitionBy("symbol").parquet(f"{self.config.data_path}last_update.parquet")
+        deduped_df.write.mode("overwrite").parquet(f"{self.config.data_path}last_update.parquet")
         
         # Reload the last_update DataFrame
         self.dfs["last_update"] = self.load_parquet("last_update")
@@ -258,7 +260,6 @@ class StockDataProcessor:
         """Process a batch of symbols using Spark's native parallelism"""
         symbol_df = self.spark.session.createDataFrame(symbol_batch, ["symbol", "is_etf"])
         last_update_df = self.data_store.dfs["last_update"]
-        self.first_time = True if last_update_df.count() == 0 else False
 
         # Join symbol_df with last_update_df to get the last_update date for each symbol
         symbol_with_last_update_df = symbol_df.join(last_update_df, "symbol", "left_outer")
@@ -288,7 +289,7 @@ class StockDataProcessor:
 
     def _process_price_data(self, spark_df: Any) -> Any:
         return spark_df.select(
-            F.col("symbol"),
+            F.upper(F.col("symbol")).alias("symbol"),
             F.col("Date").alias("trade_date"),
             F.col("Open").alias("open"),
             F.col("High").alias("high"),
@@ -299,7 +300,7 @@ class StockDataProcessor:
 
     def _process_last_update_data(self, spark_df: Any) -> Any:
         return spark_df.select(
-            F.col("symbol"),
+            F.upper(F.col("symbol")).alias("symbol"),
             F.lit(date.today()).alias("last_update")
         ).distinct()
 
@@ -307,12 +308,8 @@ class StockDataProcessor:
         """Write updates to storage if there are any changes"""
         if price_data.count() > 0:
             self.data_store.write_dataframe(price_data, 'stock_prices')
-        
-        if self.first_time and last_update_data.count() > 0:
-            self.data_store.write_dataframe(last_update_data, 'last_update')
-        else:
-            if price_data.count() > 0 and last_update_data.count() > 0:
-                self.data_store.accumulate_last_update(last_update_data)
+        if price_data.count() > 0 and last_update_data.count() > 0:
+            self.data_store.accumulate_last_update(last_update_data)
 
 class StockDataManager:
     """Main class that orchestrates the stock data operations"""
@@ -341,14 +338,21 @@ class StockDataManager:
             url = "http://www.nasdaqtrader.com/dynamic/SymDir/nasdaqtraded.txt"
             df = pd.read_csv(url, sep="|")
             df = df[df["Test Issue"] == "N"]
+            last_update_df = self.data_store.dfs["last_update"]
 
+            outdated_symbols = last_update_df.filter(F.col("last_update") < F.lit(date.today())).select("symbol").distinct()
+            outdated_symbols_list = [row["symbol"] for row in outdated_symbols.collect()]
+            symbols_in_db = [row["symbol"] for row in last_update_df.select("symbol").distinct().collect()]
 
-            df = df.head(5)
+            df = df[df["NASDAQ Symbol"].isin(outdated_symbols_list) | ~df["NASDAQ Symbol"].isin(symbols_in_db)]
+
+            # df = df.head(5)
             
             symbols = (
                 [(symbol, 'N') for symbol in df[df["ETF"] == "N"]["NASDAQ Symbol"]]
             )
             
+
             self.logger.info(f"Found {len(symbols)} total symbols to process")
             
             for i in range(0, len(symbols), self.process_config.batch_size):
