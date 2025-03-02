@@ -1,5 +1,5 @@
-CSVs/
+fetch_data/raw_data/CSVs/
 stocks.db
 logs/
 alphavantage_key.txt
-parquets/
+fetch_data/raw_data/parquets/
