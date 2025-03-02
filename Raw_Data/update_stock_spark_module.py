@@ -36,6 +36,11 @@ class SparkConfig:
     parallelism: int = 200
     executor_memory: str = "10g"
     driver_memory: str = "10g"
+    network_timeout: str = "800s"
+    heartbeat_interval: str = "600"
+    worker_timeout: str = "800"
+    lookup_timeout: str = "800"
+    ask_timeout: str = "800"
     garbage_collectors: Dict[str, str] = field(default_factory=lambda: {
         "spark.eventLog.gcMetrics.youngGenerationGarbageCollectors": "G1 Young Generation",
         "spark.eventLog.gcMetrics.oldGenerationGarbageCollectors": "G1 Old Generation"
@@ -103,7 +108,12 @@ class SparkManager:
                 .config("spark.sql.shuffle.partitions", self.config.shuffle_partitions)
                 .config("spark.default.parallelism", self.config.parallelism)
                 .config("spark.executor.memory", self.config.executor_memory)
-                .config("spark.driver.memory", self.config.driver_memory))               
+                .config("spark.driver.memory", self.config.driver_memory)   
+                .config("spark.network.timeout", self.config.network_timeout)
+                .config("spark.executor.heartbeatInterval", self.config.heartbeat_interval)
+                .config("spark.worker.timeout", self.config.worker_timeout)
+                .config("spark.akka.timeout", self.config.lookup_timeout)
+                .config("spark.akka.askTimeout", self.config.ask_timeout))            
             for key, value in self.config.garbage_collectors.items():
                 builder = builder.config(key, value)
             
@@ -163,7 +173,10 @@ class DataStore:
         self.dfs["last_update"] = self.load_parquet("last_update")
 
     def write_dataframe(self, df: Any, name: str):
-        df.write.mode("append").partitionBy("symbol").parquet(f"{self.config.data_path}{name}.parquet")
+        if name == "last_update":
+            df.write.mode("append").parquet(f"{self.config.data_path}{name}.parquet")
+        else:
+            df.write.mode("append").partitionBy("symbol").parquet(f"{self.config.data_path}{name}.parquet")
 
     def accumulate_last_update(self, new_data: Any):
         """Accumulate new data for the last_update table"""
@@ -177,27 +190,25 @@ class DataStore:
         if self.accumulated_last_update is None:
             return
 
-        last_update_df = self.dfs["last_update"]
+        # First, coalesce the accumulated data to reduce partitions
+        accumulated_df = self.accumulated_last_update.coalesce(8).alias("accumulated")
+        last_update_df = self.dfs["last_update"].alias("last_update")
         
-        # Join new data with existing last_update data to find records to update
-        updated_df = self.accumulated_last_update.join(last_update_df, "symbol", "left_outer") \
-                             .select(
-                                 F.coalesce(self.accumulated_last_update["symbol"], last_update_df["symbol"]).alias("symbol"),
-                                 F.coalesce(self.accumulated_last_update["last_update"], last_update_df["last_update"]).alias("last_update")
-                             )
+        # First, combine all data (both existing and new)
+        all_symbols_df = (
+            last_update_df.select("symbol", "last_update")
+            .unionByName(accumulated_df.select("symbol", "last_update"))
+        )
+
+        # First group by symbol and get the max last_update for each
+        deduped_df = all_symbols_df.groupBy("symbol").agg(
+            F.max("last_update").alias("last_update")
+        ).coalesce(8)  # Reduce partitions for writing
         
-        # Union the updated records with the new records
-        merged_df = updated_df.union(self.accumulated_last_update.select("symbol", "last_update"))
-        
-        # Remove duplicates by keeping the latest last_update for each symbol
-        window_spec = Window.partitionBy("symbol").orderBy(F.desc("last_update"))
-        deduped_df = merged_df.withColumn("rank", F.row_number().over(window_spec)) \
-                              .filter(F.col("rank") == 1) \
-                              .drop("rank")
         
         # Write the deduplicated DataFrame to the last_update table
         deduped_df.write.mode("overwrite").parquet(f"{self.config.data_path}last_update.parquet")
-        
+
         # Reload the last_update DataFrame
         self.dfs["last_update"] = self.load_parquet("last_update")
         self.accumulated_last_update = None
@@ -254,7 +265,6 @@ class StockDataProcessor:
         self.fetcher = fetcher
         self.logger = logger
         self.config = config
-        self.first_time = False
 
     def process_symbol_batch(self, symbol_batch: List[Tuple[str, bool]]):
         """Process a batch of symbols using Spark's native parallelism"""
@@ -264,12 +274,19 @@ class StockDataProcessor:
         # Join symbol_df with last_update_df to get the last_update date for each symbol
         symbol_with_last_update_df = symbol_df.join(last_update_df, "symbol", "left_outer")
 
-        symbol_rdd = symbol_with_last_update_df.rdd.map(lambda row: (row["symbol"], row["is_etf"], row["last_update"]))
-
+        # Convert to pandas and process using pandas instead of RDD
+        # This can avoid the socket timeout issues in Spark RDD processing
+        symbol_pd_df = symbol_with_last_update_df.toPandas()
+        
         all_data = []
-        for data in symbol_rdd.map(self.fetcher.fetch_stock_data).collect():
-            if data is not None:
-                all_data.append(data)
+        for _, row in symbol_pd_df.iterrows():
+            try:
+                data = self.fetcher.fetch_stock_data((row["symbol"], row["is_etf"], row["last_update"]))
+                if data is not None:
+                    all_data.append(data)
+            except Exception as e:
+                self.logger.error(f"Error processing symbol {row['symbol']}: {str(e)}")
+                continue
         
         if not all_data:
             return
@@ -306,10 +323,29 @@ class StockDataProcessor:
 
     def _write_updates(self, price_data: Any, last_update_data: Any):
         """Write updates to storage if there are any changes"""
-        if price_data.count() > 0:
-            self.data_store.write_dataframe(price_data, 'stock_prices')
-        if price_data.count() > 0 and last_update_data.count() > 0:
-            self.data_store.accumulate_last_update(last_update_data)
+        if price_data.isEmpty:
+            return
+        # Write price data first as it's always an append operation
+        self.data_store.write_dataframe(price_data, 'stock_prices')
+        
+        # Get reference to last_update table
+        last_update_table = self.data_store.dfs["last_update"]
+        
+        # If the last_update table is empty (first time), write all symbols
+        if last_update_table.isEmpty:
+            self.data_store.write_dataframe(last_update_data, 'last_update')
+        else:
+            # Split last_update_data into new and existing symbols
+            new_symbols_df = last_update_data.join(last_update_table, "symbol", "leftanti")
+            existing_symbols_df = last_update_data.join(last_update_table, "symbol", "semi")
+            
+            # Write new symbols directly
+            if not new_symbols_df.isEmpty:
+                self.data_store.write_dataframe(new_symbols_df, 'last_update')
+                
+            # Accumulate existing symbols for merge operation 
+            if not existing_symbols_df.isEmpty:
+                self.data_store.accumulate_last_update(existing_symbols_df)
 
 class StockDataManager:
     """Main class that orchestrates the stock data operations"""
