@@ -418,7 +418,7 @@ def main():
     # check if today is a trading day
     calendar = get_calendar("NASDAQ")
     today = date.today()
-    if not calendar.valid_days(start_date=today, end_date=today).size:
+    if calendar.valid_days(start_date=today, end_date=today).size:
         print("Today is not a trading day.")
         return 0
     else:
