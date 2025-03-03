@@ -280,7 +280,6 @@ class StockDataProcessor:
         # Convert to pandas and process using pandas instead of RDD
         # This can avoid the socket timeout issues in Spark RDD processing
         symbol_pd_df = symbol_with_last_update_df.toPandas()
-        
         all_data = []
         for _, row in symbol_pd_df.iterrows():
             try:
@@ -295,16 +294,15 @@ class StockDataProcessor:
             return
         
         combined_df = pd.concat(all_data, ignore_index=True)
+
         spark_df = self.spark.session.createDataFrame(combined_df)
-        
+        # print("inside process_symbol_batch",spark_df.show())
         self._update_dataframes(spark_df)
 
     def _update_dataframes(self, spark_df: Any):
         """Update all dataframes with new data"""
         price_data = self._process_price_data(spark_df)
-
         last_update_data = self._process_last_update_data(spark_df)
-
         self._write_updates(price_data, last_update_data)
 
     def _process_price_data(self, spark_df: Any) -> Any:
@@ -326,7 +324,8 @@ class StockDataProcessor:
 
     def _write_updates(self, price_data: Any, last_update_data: Any):
         """Write updates to storage if there are any changes"""
-        if price_data.isEmpty:
+        if price_data.isEmpty():
+            self.logger.info("No new price data to write")
             return
         # Write price data first as it's always an append operation
         self.data_store.write_dataframe(price_data, 'stock_prices')
@@ -335,7 +334,7 @@ class StockDataProcessor:
         last_update_table = self.data_store.dfs["last_update"]
         
         # If the last_update table is empty (first time), write all symbols
-        if last_update_table.isEmpty:
+        if last_update_table.isEmpty():
             self.data_store.write_dataframe(last_update_data, 'last_update')
         else:
             # Split last_update_data into new and existing symbols
@@ -343,11 +342,11 @@ class StockDataProcessor:
             existing_symbols_df = last_update_data.join(last_update_table, "symbol", "semi")
             
             # Write new symbols directly
-            if not new_symbols_df.isEmpty:
+            if not new_symbols_df.isEmpty():
                 self.data_store.write_dataframe(new_symbols_df, 'last_update')
                 
             # Accumulate existing symbols for merge operation 
-            if not existing_symbols_df.isEmpty:
+            if not existing_symbols_df.isEmpty():
                 self.data_store.accumulate_last_update(existing_symbols_df)
 
 class StockDataManager:
@@ -418,7 +417,7 @@ def main():
     # check if today is a trading day
     calendar = get_calendar("NASDAQ")
     today = date.today()
-    if calendar.valid_days(start_date=today, end_date=today).size:
+    if not calendar.valid_days(start_date=today, end_date=today).size:
         print("Today is not a trading day.")
         return 0
     else:
