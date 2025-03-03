@@ -10,7 +10,7 @@
 5. Still under `System variables`, find and open `Path`
 6. Add `%HADOOP_HOME%\bin` to `Path`
 ## Running Instructions
-1. Open `update_stock_spark_module.py`.
+1. Open `update_stock_spark_module.py` in `fetch_data`.
 2. Set `os.environ["PYSPARK_PYTHON"]` and `os.environ["PYSPARK_DRIVER_PYTHON"]` to the path to your python.exe file inside the previously installed conda environment.
 3. Activate `tf270_stocks` environemnt.
 4. Run `update_stock_spark_module.py`.
