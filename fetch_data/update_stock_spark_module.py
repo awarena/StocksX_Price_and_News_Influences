@@ -46,61 +46,69 @@ class SparkConfig:
         "spark.eventLog.gcMetrics.oldGenerationGarbageCollectors": "G1 Old Generation"
     })
 class SizeAndTimeRotatingFileHandler(TimedRotatingFileHandler):
+    """Custom file handler that rotates logs based on both size and time."""
     def __init__(self, filename, when='midnight', interval=1, backupCount=0, encoding=None, delay=False, utc=False, maxBytes=0):
         super().__init__(filename, when, interval, backupCount, encoding, delay, utc)
         self.maxBytes = maxBytes
 
     def shouldRollover(self, record):
-        if self.stream is None:  # delay was set...
+        """Determine if rollover should occur based on log file size."""
+        if self.stream is None:
             self.stream = self._open()
-        if self.maxBytes > 0:  # are we rolling over?
-            self.stream.seek(0, 2)  # due to non-posix-compliant Windows feature
+        if self.maxBytes > 0:
+            self.stream.seek(0, 2)
             if self.stream.tell() >= self.maxBytes:
                 return 1
         return super().shouldRollover(record)
     
 class Logger:
-    """Handles logging operations"""
+    """Handles logging operations."""
     def __init__(self, config: ProcessingConfig):
+        """
+        Initialize logger with file and console handlers.
+        
+        Args:
+            config (ProcessingConfig): Configuration for logging.
+        """
         self.config = config
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
         
-        # Create a custom rotating file handler
         file_handler = SizeAndTimeRotatingFileHandler(
-            config.log_path, 
-            when="midnight", 
-            interval=1, 
-            backupCount=config.log_backup_count,
-            maxBytes=config.log_max_bytes
+            config.log_path, when="midnight", interval=1, backupCount=config.log_backup_count, maxBytes=config.log_max_bytes
         )
-        file_handler.suffix = "%Y-%m-%d"
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        
-        # Create a stream handler
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        
         self.logger.addHandler(file_handler)
         self.logger.addHandler(stream_handler)
 
     def info(self, message: str):
+        """Log an info message."""
         self.logger.info(message)
 
     def error(self, message: str):
+        """Log an error message."""
         self.logger.error(message)
 
     def __reduce__(self):
         return (self.__class__, (self.config,))
 
 class SparkManager:
-    """Manages Spark session and configurations"""
+    """Manages Apache Spark session."""
     def __init__(self, config: SparkConfig):
+        """
+        Initialize SparkManager with configurations.
+        
+        Args:
+            config (SparkConfig): Configuration settings for Spark.
+        """
         self.config = config
         self._session = None
 
     @property
     def session(self) -> SparkSession:
+        """Get or create a Spark session."""
         if self._session is None:
             builder = (SparkSession.builder
                 .appName(self.config.app_name)
@@ -116,20 +124,25 @@ class SparkManager:
                 .config("spark.akka.askTimeout", self.config.ask_timeout))            
             for key, value in self.config.garbage_collectors.items():
                 builder = builder.config(key, value)
-            
             self._session = builder.getOrCreate()
         return self._session
 
     def cleanup(self):
+        """Stop the Spark session."""
         if self._session:
             self._session.stop()
             self._session = None
 
 class DataSchema:
-    """Manages schema definitions for different data types"""
+    """Defines schema for stock price and last update data."""
     
     @property
     def stock_prices(self) -> StructType:
+        """Returns schema for stock price data.
+        
+        Returns:
+            StructType: Schema containing fields for stock prices.
+        """
         return StructType([
             StructField("symbol", StringType(), False),
             StructField("trade_date", DateType(), False),
@@ -143,6 +156,11 @@ class DataSchema:
 
     @property
     def last_update(self) -> StructType:
+        """Returns schema for last update tracking.
+        
+        Returns:
+            StructType: Schema containing fields for tracking last updates.
+        """
         return StructType([
             StructField("symbol", StringType(), False),
             StructField("last_update", DateType(), False)
@@ -152,6 +170,14 @@ class DataSchema:
 class DataStore:
     """Manages data storage and retrieval operations"""
     def __init__(self, spark_manager: SparkManager, schema: DataSchema, config: ProcessingConfig):
+        """
+        Initializes the DataStore.
+        
+        Args:
+            spark_manager (SparkManager): Manages Spark session.
+            schema (DataSchema): Defines schemas for stock data.
+            config (ProcessingConfig): Configuration settings for data storage.
+        """
         self.spark = spark_manager
         self.schema = schema
         self.config = config
@@ -160,6 +186,14 @@ class DataStore:
 
 
     def load_parquet(self, name: str) -> Any:
+        """Loads a Parquet file into a Spark DataFrame.
+        
+        Args:
+            name (str): Name of the Parquet file (without extension).
+        
+        Returns:
+            Any: Spark DataFrame containing the loaded data.
+        """
         # Check if datapath exists, if not create it
         if not os.path.exists(self.config.data_path):
             os.makedirs(self.config.data_path)
@@ -172,17 +206,28 @@ class DataStore:
         return self.spark.session.createDataFrame([], schema)
 
     def load_all_dataframes(self):
+        """Loads all stock-related Parquet files into memory."""
         self.dfs["stock_prices"] = self.load_parquet("stock_prices")
         self.dfs["last_update"] = self.load_parquet("last_update")
 
     def write_dataframe(self, df: Any, name: str):
+        """Writes a Spark DataFrame to a Parquet file.
+        
+        Args:
+            df (Any): Spark DataFrame to be written.
+            name (str): Name of the Parquet file (without extension).
+        """
         if name == "last_update":
             df.write.mode("append").parquet(f"{self.config.data_path}{name}.parquet")
         else:
             df.write.mode("append").partitionBy("symbol").parquet(f"{self.config.data_path}{name}.parquet")
 
     def accumulate_last_update(self, new_data: Any):
-        """Accumulate new data for the last_update table"""
+        """Accumulates new stock update data before merging.
+        
+        Args:
+            new_data (Any): Spark DataFrame containing new update data.
+        """
         if self.accumulated_last_update is None:
             self.accumulated_last_update = new_data
         else:
@@ -219,10 +264,27 @@ class DataStore:
 class StockDataFetcher:
     """Handles stock data fetching operations"""
     def __init__(self, config: ProcessingConfig, logger: Logger):
+        """
+        Initializes the stock data fetcher.
+        
+        Args:
+            config (ProcessingConfig): Configuration settings for stock data fetching.
+            logger (Logger): Logger instance for logging events.
+        """
         self.config = config
         self.logger = logger
 
     def fetch_stock_data(self, symbol_info: Tuple[str, str], last_update: Optional[date] = None) -> Optional[pd.DataFrame]:
+        """
+        Fetches stock price data from Yahoo Finance.
+        
+        Args:
+            symbol_info (Tuple[str, str]): Tuple containing the stock symbol and ETF flag.
+            last_update (Optional[date]): The last update date for the stock data.
+        
+        Returns:
+            Optional[pd.DataFrame]: Pandas DataFrame containing stock data, or None if fetching fails.
+        """
         symbol, is_etf, last_update = symbol_info
         try:
             period = "max" if last_update is None else f"{(date.today() - last_update).days}d"
@@ -263,6 +325,16 @@ class StockDataProcessor:
                  fetcher: StockDataFetcher,
                  logger: Logger,
                  config: ProcessingConfig):
+        """
+        Initializes the stock data processor.
+
+        Args:
+            spark_manager (SparkManager): Manages Spark session.
+            data_store (DataStore): Handles data storage and retrieval.
+            fetcher (StockDataFetcher): Fetches stock data from external sources.
+            logger (Logger): Logger instance for logging events.
+            config (ProcessingConfig): Configuration settings for processing.
+        """
         self.spark = spark_manager
         self.data_store = data_store
         self.fetcher = fetcher
@@ -270,7 +342,11 @@ class StockDataProcessor:
         self.config = config
 
     def process_symbol_batch(self, symbol_batch: List[Tuple[str, bool]]):
-        """Process a batch of symbols using Spark's native parallelism"""
+        """Processes a batch of stock symbols using Spark and Pandas.
+
+        Args:
+            symbol_batch (List[Tuple[str, bool]]): List of tuples containing stock symbols and ETF flag.
+        """
         symbol_df = self.spark.session.createDataFrame(symbol_batch, ["symbol", "is_etf"])
         last_update_df = self.data_store.dfs["last_update"]
 
@@ -300,12 +376,24 @@ class StockDataProcessor:
         self._update_dataframes(spark_df)
 
     def _update_dataframes(self, spark_df: Any):
-        """Update all dataframes with new data"""
+        """Updates dataframes with new stock data.
+
+        Args:
+            spark_df (Any): Spark DataFrame containing new stock data.
+        """
         price_data = self._process_price_data(spark_df)
         last_update_data = self._process_last_update_data(spark_df)
         self._write_updates(price_data, last_update_data)
 
     def _process_price_data(self, spark_df: Any) -> Any:
+        """Processes price data for stock updates.
+
+        Args:
+            spark_df (Any): Spark DataFrame containing stock data.
+
+        Returns:
+            Any: Processed Spark DataFrame with price data.
+        """
         return spark_df.select(
             F.upper(F.col("symbol")).alias("symbol"),
             F.col("Date").alias("trade_date"),
@@ -317,13 +405,26 @@ class StockDataProcessor:
             ).join(self.data_store.dfs["stock_prices"], ["symbol", "trade_date"], "leftanti")
 
     def _process_last_update_data(self, spark_df: Any) -> Any:
+        """Processes last update information for stocks.
+
+        Args:
+            spark_df (Any): Spark DataFrame containing stock data.
+
+        Returns:
+            Any: Spark DataFrame with last update details.
+        """
         return spark_df.select(
             F.upper(F.col("symbol")).alias("symbol"),
             F.lit(date.today()).alias("last_update")
         ).distinct()
 
     def _write_updates(self, price_data: Any, last_update_data: Any):
-        """Write updates to storage if there are any changes"""
+        """Writes updated stock data to storage.
+
+        Args:
+            price_data (Any): Spark DataFrame containing price updates.
+            last_update_data (Any): Spark DataFrame with last update records.
+        """
         if price_data.isEmpty():
             self.logger.info("No new price data to write")
             return
