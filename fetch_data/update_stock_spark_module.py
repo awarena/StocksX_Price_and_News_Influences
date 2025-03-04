@@ -342,7 +342,7 @@ class StockDataProcessor:
         self.config = config
 
     def process_symbol_batch(self, symbol_batch: List[Tuple[str, bool]]):
-        """Processes a batch of stock symbols using Spark and Pandas.
+        """Processes a batch of stock symbols using Spark RDD.
 
         Args:
             symbol_batch (List[Tuple[str, bool]]): List of tuples containing stock symbols and ETF flag.
@@ -353,27 +353,26 @@ class StockDataProcessor:
         # Join symbol_df with last_update_df to get the last_update date for each symbol
         symbol_with_last_update_df = symbol_df.join(last_update_df, "symbol", "left_outer")
 
-        # Convert to pandas and process using pandas instead of RDD
-        # This can avoid the socket timeout issues in Spark RDD processing
-        symbol_pd_df = symbol_with_last_update_df.toPandas()
-        all_data = []
-        for _, row in symbol_pd_df.iterrows():
-            try:
-                data = self.fetcher.fetch_stock_data((row["symbol"], row["is_etf"], row["last_update"]))
-                if data is not None:
-                    all_data.append(data)
-            except Exception as e:
-                self.logger.error(f"Error processing symbol {row['symbol']}: {str(e)}")
-                continue
-        
-        if not all_data:
-            return
-        
-        combined_df = pd.concat(all_data, ignore_index=True)
+        # Convert to RDD for parallel processing
+        symbol_rdd = symbol_with_last_update_df.rdd.map(lambda row: (row["symbol"], row["is_etf"], row["last_update"]))
 
-        spark_df = self.spark.session.createDataFrame(combined_df)
-        # print("inside process_symbol_batch",spark_df.show())
-        self._update_dataframes(spark_df)
+        fetcher_bc = self.spark.session.sparkContext.broadcast(self.fetcher)
+
+        def fetch_stock_data_broadcast(symbol_tuple):
+            fetcher = fetcher_bc.value  # Retrieve the broadcast variable
+            symbol, is_etf, last_update = symbol_tuple
+            try:
+                return [fetcher.fetch_stock_data((symbol, is_etf, last_update))]
+            except Exception as e:
+                print(f"Error processing symbol {symbol}: {str(e)}")
+                return []
+
+        stock_data_rdd = symbol_rdd.flatMap(fetch_stock_data_broadcast)
+
+        # Convert RDD to Spark DataFrame (avoiding Pandas)
+        if not stock_data_rdd.isEmpty():
+            spark_df = self.spark.session.createDataFrame(stock_data_rdd)
+            self._update_dataframes(spark_df)
 
     def _update_dataframes(self, spark_df: Any):
         """Updates dataframes with new stock data.
