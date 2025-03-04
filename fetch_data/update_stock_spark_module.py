@@ -238,17 +238,17 @@ class DataStore:
         if self.accumulated_last_update is None:
             return
 
-        # First, coalesce the accumulated data to reduce partitions
+        # coalesce the accumulated data to reduce partitions
         accumulated_df = self.accumulated_last_update.coalesce(8).alias("accumulated")
         last_update_df = self.dfs["last_update"].alias("last_update")
         
-        # First, combine all data (both existing and new)
+        # combine all data (both existing and new)
         all_symbols_df = (
             last_update_df.select("symbol", "last_update")
             .unionByName(accumulated_df.select("symbol", "last_update"))
         )
 
-        # First group by symbol and get the max last_update for each
+        # group by symbol and get the max last_update for each
         deduped_df = all_symbols_df.groupBy("symbol").agg(
             F.max("last_update").alias("last_update")
         ).coalesce(8)  # Reduce partitions for writing
