@@ -7,7 +7,8 @@ import time
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql import Window
-from pyspark.sql.types import StructType, StructField, StringType, DateType, FloatType, IntegerType
+from pyspark.sql.types import StructType, StructField, StringType, DateType, FloatType, IntegerType, LongType
+from pyspark import SparkContext as sc
 import logging
 from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass, field
@@ -91,9 +92,6 @@ class Logger:
         """Log an error message."""
         self.logger.error(message)
 
-    def __reduce__(self):
-        return (self.__class__, (self.config,))
-
 class SparkManager:
     """Manages Apache Spark session."""
     def __init__(self, config: SparkConfig):
@@ -151,7 +149,7 @@ class DataSchema:
             StructField("high", FloatType(), True),
             StructField("low", FloatType(), True),
             StructField("close", FloatType(), True),
-            StructField("volume", IntegerType(), True)
+            StructField("volume", LongType(), True)
         ])
 
     @property
@@ -164,6 +162,24 @@ class DataSchema:
         return StructType([
             StructField("symbol", StringType(), False),
             StructField("last_update", DateType(), False)
+        ])
+    
+    @property
+    def stock_prices_processing(self) -> StructType:
+        """Returns schema for stock price data during processing.
+        
+        Returns:
+            StructType: Schema containing fields for stock prices during processing.
+        """
+        return StructType([
+            StructField("Date", DateType(), True),
+            StructField("Close", FloatType(), True),
+            StructField("High", FloatType(), True),
+            StructField("Low", FloatType(), True),
+            StructField("Open", FloatType(), True),
+            StructField("Volume", LongType(), True),
+            StructField("symbol", StringType(), True),
+            StructField("is_etf", StringType(), True),
         ])
     
 
@@ -274,49 +290,59 @@ class StockDataFetcher:
         self.config = config
         self.logger = logger
 
-    def fetch_stock_data(self, symbol_info: Tuple[str, str], last_update: Optional[date] = None) -> Optional[pd.DataFrame]:
+class StockDataFetcher:
+    """Handles stock data fetching operations"""
+
+    def __init__(self, config: ProcessingConfig, logger: Logger):
+        """Initializes the stock data fetcher."""
+        self.config = config
+        self.logger = logger
+
+    @staticmethod
+    def fetch_stock_data(symbol_info: Tuple[str, str, Optional[date]], config: ProcessingConfig) -> Optional[pd.DataFrame]:
         """
         Fetches stock price data from Yahoo Finance.
-        
+
         Args:
-            symbol_info (Tuple[str, str]): Tuple containing the stock symbol and ETF flag.
-            last_update (Optional[date]): The last update date for the stock data.
-        
+            symbol_info (Tuple[str, str, Optional[date]]): Stock symbol, ETF flag, and last update date.
+            config (ProcessingConfig): Config object for retries.
+            logger (Logger): Logger for logging errors.
+
         Returns:
-            Optional[pd.DataFrame]: Pandas DataFrame containing stock data, or None if fetching fails.
+            Optional[pd.DataFrame]: Pandas DataFrame with stock data, or None if fetching fails.
         """
         symbol, is_etf, last_update = symbol_info
-        try:
-            period = "max" if last_update is None else f"{(date.today() - last_update).days}d"
-            
-            for attempt in range(self.config.max_retries):
-                try:
-                    df = yf.download(symbol, period=period, interval="1d", progress=False, auto_adjust=True)
+        period = "max" if last_update is None else f"{(date.today() - last_update).days}d"
+
+        for attempt in range(config['max_retries']):
+            try:
+                df = yf.download(symbol, period=period, interval="1d", progress=False, auto_adjust=True)
+                if df.empty:
+                    df = yf.download(symbol, period="1d", interval="1d", progress=False, auto_adjust=True)
                     if df.empty:
-                        df = yf.download(symbol, period="1d", interval="1d", progress=False, auto_adjust=True)
-                        if df.empty:
-                            return None
-                    
-                    df = df.reset_index()
-                    df['symbol'] = symbol
-                    df['is_etf'] = is_etf
-
-                    # Flatten the columns if they are MultiIndex
-                    if isinstance(df.columns, pd.MultiIndex):
-                        df.columns = [col[0] for col in df.columns]
-
-                    return df
-                except Exception as e:
-                    if attempt == self.config.max_retries - 1:
-                        self.logger.error(f"Failed to fetch {symbol} after {self.config.max_retries} attempts: {str(e)}")
                         return None
-                    time.sleep(self.config.retry_delay)
-        except Exception as e:
-            self.logger.error(f"Error processing {symbol}: {str(e)}")
-            return None
 
-    def __reduce__(self):
-        return (self.__class__, (self.config, self.logger))
+                df = df.reset_index()
+                df["symbol"] = symbol
+                df["is_etf"] = is_etf
+                # convrt Date to DateType
+                df["Date"] = pd.to_datetime(df["Date"]).dt.date
+
+                # Flatten MultiIndex columns
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = [col[0] for col in df.columns]
+
+                # columns = df.columns.tolist()
+                return df.to_dict(orient="records")
+
+            except Exception as e:
+                if attempt == config['max_retries'] - 1:
+                    return None
+                time.sleep(config['retry_delay'])
+
+        return None  # Should never reach here, but for safety
+
+
 class StockDataProcessor:
     """Processes and updates stock data"""
     def __init__(self, 
@@ -324,7 +350,8 @@ class StockDataProcessor:
                  data_store: DataStore,
                  fetcher: StockDataFetcher,
                  logger: Logger,
-                 config: ProcessingConfig):
+                 config: ProcessingConfig,
+                 processing_schema: DataSchema):
         """
         Initializes the stock data processor.
 
@@ -340,40 +367,36 @@ class StockDataProcessor:
         self.fetcher = fetcher
         self.logger = logger
         self.config = config
+        self.processing_schema = processing_schema
 
     def process_symbol_batch(self, symbol_batch: List[Tuple[str, bool]]):
-        """Processes a batch of stock symbols using Spark and Pandas.
+        """Processes a batch of stock symbols using Spark RDD."""
 
-        Args:
-            symbol_batch (List[Tuple[str, bool]]): List of tuples containing stock symbols and ETF flag.
-        """
+        config_dict = dict(
+            max_retries=self.config.max_retries,
+            retry_delay=self.config.retry_delay)
+        config_broadcast = self.spark.session.sparkContext.broadcast(config_dict)
+
+
         symbol_df = self.spark.session.createDataFrame(symbol_batch, ["symbol", "is_etf"])
         last_update_df = self.data_store.dfs["last_update"]
-
-        # Join symbol_df with last_update_df to get the last_update date for each symbol
         symbol_with_last_update_df = symbol_df.join(last_update_df, "symbol", "left_outer")
 
-        # Convert to pandas and process using pandas instead of RDD
-        # This can avoid the socket timeout issues in Spark RDD processing
-        symbol_pd_df = symbol_with_last_update_df.toPandas()
-        all_data = []
-        for _, row in symbol_pd_df.iterrows():
-            try:
-                data = self.fetcher.fetch_stock_data((row["symbol"], row["is_etf"], row["last_update"]))
-                if data is not None:
-                    all_data.append(data)
-            except Exception as e:
-                self.logger.error(f"Error processing symbol {row['symbol']}: {str(e)}")
-                continue
-        
-        if not all_data:
-            return
-        
-        combined_df = pd.concat(all_data, ignore_index=True)
+        symbol_rdd = symbol_with_last_update_df.rdd.map(lambda row: (row["symbol"], row["is_etf"], row["last_update"]))
 
-        spark_df = self.spark.session.createDataFrame(combined_df)
-        # print("inside process_symbol_batch",spark_df.show())
+        # Don't pass `logger`, only use it on the driver
+        stock_data_rdd = symbol_rdd.flatMap(
+            lambda symbol_tuple: StockDataFetcher.fetch_stock_data(symbol_tuple, config_broadcast.value) or []
+        ).filter(lambda x: x is not None)
+
+
+        if stock_data_rdd.isEmpty():
+            self.logger.info("No new stock data to process.")  # Logging happens only on driver
+            return
+
+        spark_df = self.spark.session.createDataFrame(stock_data_rdd, schema=self.processing_schema.stock_prices_processing)
         self._update_dataframes(spark_df)
+
 
     def _update_dataframes(self, spark_df: Any):
         """Updates dataframes with new stock data.
@@ -465,7 +488,8 @@ class StockDataManager:
             self.data_store,
             self.fetcher,
             self.logger,
-            self.process_config
+            self.process_config,
+            self.schema
         )
         
         # Initialize dataframes
