@@ -79,7 +79,9 @@ class Logger:
         self.config = config
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
-        
+        # if log path does not exist, create it
+        if not os.path.exists(os.path.dirname(config.log_path)):
+            os.makedirs(os.path.dirname(config.log_path))
         file_handler = SizeAndTimeRotatingFileHandler(
             config.log_path, when="midnight", interval=1, backupCount=config.log_backup_count, maxBytes=config.log_max_bytes
         )
