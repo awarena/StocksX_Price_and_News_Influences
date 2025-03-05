@@ -323,7 +323,7 @@ class StockDataFetcher:
 
         for attempt in range(config['max_retries']):
             try:
-                df = yf.download(symbol, period=period, interval="1d", progress=False, auto_adjust=True)
+                df = yf.download(symbol, period=period, interval="1d", progress=False, auto_adjust=True, group_by="column")
                 if df.empty:
                     df = yf.download(symbol, period="1d", interval="1d", progress=False, auto_adjust=True)
                     if df.empty:
@@ -339,7 +339,6 @@ class StockDataFetcher:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = [col[0] for col in df.columns]
 
-                # columns = df.columns.tolist()
                 return df.to_dict(orient="records")
 
             except Exception as e:
