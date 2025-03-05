@@ -33,15 +33,18 @@ class SparkConfig:
     """Configuration settings for Spark"""
     app_name: str = "StocksX_Price_and_News_Influences"
     arrow_enabled: bool = True
-    shuffle_partitions: int = 200
-    parallelism: int = 200
-    executor_memory: str = "10g"
-    driver_memory: str = "10g"
+    shuffle_partitions: int = 16
+    parallelism: int = 16
+    executor_memory: str = "5g"
+    driver_memory: str = "5g"
     network_timeout: str = "800s"
     heartbeat_interval: str = "600"
     worker_timeout: str = "800"
     lookup_timeout: str = "800"
     ask_timeout: str = "800"
+    serializer: str = "org.apache.spark.serializer.KryoSerializer"
+    kryo_registration_required: str = "false"
+    master: str = "local[*]"
     garbage_collectors: Dict[str, str] = field(default_factory=lambda: {
         "spark.eventLog.gcMetrics.youngGenerationGarbageCollectors": "G1 Young Generation",
         "spark.eventLog.gcMetrics.oldGenerationGarbageCollectors": "G1 Old Generation"
@@ -119,7 +122,11 @@ class SparkManager:
                 .config("spark.executor.heartbeatInterval", self.config.heartbeat_interval)
                 .config("spark.worker.timeout", self.config.worker_timeout)
                 .config("spark.akka.timeout", self.config.lookup_timeout)
-                .config("spark.akka.askTimeout", self.config.ask_timeout))            
+                .config("spark.akka.askTimeout", self.config.ask_timeout)
+                .config("spark.serializer", self.config.serializer)
+                .config("spark.kryo.registrationRequired", self.config.kryo_registration_required)
+                .config("spark.master", self.config.master)
+                )            
             for key, value in self.config.garbage_collectors.items():
                 builder = builder.config(key, value)
             self._session = builder.getOrCreate()
@@ -259,16 +266,12 @@ class DataStore:
         last_update_df = self.dfs["last_update"].alias("last_update")
         
         # combine all data (both existing and new)
-        all_symbols_df = (
-            last_update_df.select("symbol", "last_update")
-            .unionByName(accumulated_df.select("symbol", "last_update"))
-        )
+        all_symbols_df = accumulated_df.union(last_update_df).distinct()
 
-        # group by symbol and get the max last_update for each
         deduped_df = all_symbols_df.groupBy("symbol").agg(
             F.max("last_update").alias("last_update")
-        ).coalesce(8)  # Reduce partitions for writing
-        
+        ).repartition(self.config.parallelism)  # Allow Spark to distribute workload better
+
         
         # Write the deduplicated DataFrame to the last_update table
         deduped_df.write.mode("overwrite").parquet(f"{self.config.data_path}last_update.parquet")
@@ -453,7 +456,7 @@ class StockDataProcessor:
             return
         # Write price data first as it's always an append operation
         self.data_store.write_dataframe(price_data, 'stock_prices')
-        
+
         # Get reference to last_update table
         last_update_table = self.data_store.dfs["last_update"]
         
