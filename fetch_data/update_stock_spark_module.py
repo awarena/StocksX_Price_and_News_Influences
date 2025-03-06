@@ -1,5 +1,7 @@
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import pandas as pd
 import yfinance as yf
 from datetime import date
@@ -14,43 +16,45 @@ from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass, field
 from pandas_market_calendars import get_calendar
 import argparse
+from configs.processing_config import ProcessingConfig
+from configs.spark_config import SparkConfig
 
 
 os.environ["PYSPARK_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
 os.environ["PYSPARK_DRIVER_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
-@dataclass
-class ProcessingConfig:
-    """Configuration settings for data processing"""
-    batch_size: int = 100
-    max_retries: int = 3
-    retry_delay: int = 5
-    data_path: str = "fetch_data/raw_data/parquets/"
-    log_path: str = "fetch_data/logs/update_log.txt"
-    log_max_bytes: int = 10 * 1024 * 1024
-    log_backup_count: int = 3
-    parallelism: int = 200
+# @dataclass
+# class ProcessingConfig:
+#     """Configuration settings for data processing"""
+#     batch_size: int = 100
+#     max_retries: int = 3
+#     retry_delay: int = 5
+#     data_path: str = "fetch_data/raw_data/parquets/"
+#     log_path: str = "fetch_data/logs/update_log.txt"
+#     log_max_bytes: int = 10 * 1024 * 1024
+#     log_backup_count: int = 3
+#     parallelism: int = 200
 
-@dataclass
-class SparkConfig:
-    """Configuration settings for Spark"""
-    app_name: str = "StocksX_Price_and_News_Influences"
-    arrow_enabled: bool = True
-    shuffle_partitions: int = 16
-    parallelism: int = 16
-    executor_memory: str = "5g"
-    driver_memory: str = "5g"
-    network_timeout: str = "800s"
-    heartbeat_interval: str = "600"
-    worker_timeout: str = "800"
-    lookup_timeout: str = "800"
-    ask_timeout: str = "800"
-    serializer: str = "org.apache.spark.serializer.KryoSerializer"
-    kryo_registration_required: str = "false"
-    master: str = "local[*]"
-    garbage_collectors: Dict[str, str] = field(default_factory=lambda: {
-        "spark.eventLog.gcMetrics.youngGenerationGarbageCollectors": "G1 Young Generation",
-        "spark.eventLog.gcMetrics.oldGenerationGarbageCollectors": "G1 Old Generation"
-    })
+# @dataclass
+# class SparkConfig:
+#     """Configuration settings for Spark"""
+#     app_name: str = "StocksX_Price_and_News_Influences"
+#     arrow_enabled: bool = True
+#     shuffle_partitions: int = 16
+#     parallelism: int = 16
+#     executor_memory: str = "5g"
+#     driver_memory: str = "5g"
+#     network_timeout: str = "800s"
+#     heartbeat_interval: str = "600"
+#     worker_timeout: str = "800"
+#     lookup_timeout: str = "800"
+#     ask_timeout: str = "800"
+#     serializer: str = "org.apache.spark.serializer.KryoSerializer"
+#     kryo_registration_required: str = "false"
+#     master: str = "local[*]"
+#     garbage_collectors: Dict[str, str] = field(default_factory=lambda: {
+#         "spark.eventLog.gcMetrics.youngGenerationGarbageCollectors": "G1 Young Generation",
+#         "spark.eventLog.gcMetrics.oldGenerationGarbageCollectors": "G1 Old Generation"
+#     })
 class SizeAndTimeRotatingFileHandler(TimedRotatingFileHandler):
     """Custom file handler that rotates logs based on both size and time."""
     def __init__(self, filename, when='midnight', interval=1, backupCount=0, encoding=None, delay=False, utc=False, maxBytes=0):
@@ -323,9 +327,9 @@ class StockDataFetcher:
 
         for attempt in range(config['max_retries']):
             try:
-                df = yf.download(symbol, period=period, interval="1d", progress=False, auto_adjust=True, group_by="column")
+                df = yf.download(symbol, period=period, interval="1d", progress=False, auto_adjust=True, group_by="ticker")
                 if df.empty:
-                    df = yf.download(symbol, period="1d", interval="1d", progress=False, auto_adjust=True)
+                    df = yf.download(symbol, period="1d", interval="1d", progress=False, auto_adjust=True, group_by="ticker")
                     if df.empty:
                         return None
 
