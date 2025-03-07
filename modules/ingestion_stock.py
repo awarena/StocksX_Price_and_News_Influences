@@ -257,7 +257,7 @@ class StockDataFetcher:
                         pass
                     time.sleep(config['retry_delay'])
         if not results:
-            print("⚠️ Warning: results is EMPTY after processing!")
+            print("Warning: results is EMPTY after processing!")
         return results
 
 
