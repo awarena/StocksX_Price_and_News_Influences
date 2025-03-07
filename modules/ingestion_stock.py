@@ -25,7 +25,7 @@ class DataSchema:
     
     @property
     def stock_prices(self) -> StructType:
-        """Returns schema for stock price data.
+        """Returns schema for stock price data.write_dataframe
         
         Returns:
             StructType: Schema containing fields for stock prices.
@@ -75,46 +75,84 @@ class DataSchema:
 class DataStore:
     """Manages data storage and retrieval operations"""
     def __init__(self, spark_manager: SparkManager, schema: DataSchema, config: ProcessingConfig):
-        """
-        Initializes the DataStore.
-        
-        Args:
-            spark_manager (SparkManager): Manages Spark session.
-            schema (DataSchema): Defines schemas for stock data.
-            config (ProcessingConfig): Configuration settings for data storage.
-        """
+        """Initializes the DataStore."""
         self.spark = spark_manager
         self.schema = schema
         self.config = config
         self.dfs: Dict[str, Any] = {}
-        self.accumulated_last_update: Optional[Any] = None
-
-
+        self.metadata: Dict[str, pd.DataFrame] = {}  # Pandas DataFrames for metadata
+        
+        # Ensure directories exist
+        if not os.path.exists(self.config.data_path):
+            os.makedirs(self.config.data_path)
+        if not os.path.exists(self.config.metadata_path):
+            os.makedirs(self.config.metadata_path)
+            
     def load_parquet(self, name: str) -> Any:
-        """Loads a Parquet file into a Spark DataFrame.
-        
-        Args:
-            name (str): Name of the Parquet file (without extension).
-        
-        Returns:
-            Any: Spark DataFrame containing the loaded data.
-        """
+        """Loads a Parquet file into a Spark DataFrame."""
         # Check if datapath exists, if not create it
         if not os.path.exists(self.config.data_path):
             os.makedirs(self.config.data_path)
         path = f"{self.config.data_path}{name}.parquet"
         schema = getattr(self.schema, name)
         if os.path.exists(path):
-            if name == "last_update":
-                return self.spark.session.read.parquet(path).cache()
             return self.spark.session.read.parquet(path)
         return self.spark.session.createDataFrame([], schema)
-
+        
+    def load_metadata(self, name: str) -> pd.DataFrame:
+        """Loads metadata from CSV file directly into pandas DataFrame."""
+        csv_path = f"{self.config.metadata_path}{name}.csv"
+        
+        if os.path.exists(csv_path):
+            df = pd.read_csv(csv_path)
+            # Convert date columns if present
+            if 'last_update' in df.columns:
+                df["last_update"] = pd.to_datetime(df["last_update"]).dt.date
+            return df
+        else:
+            # Return empty DataFrame with appropriate columns
+            if name == "last_update":
+                return pd.DataFrame(columns=["symbol", "last_update"])
+            else:
+                return pd.DataFrame()
+    
+    def get_spark_metadata(self, name: str) -> Any:
+        """Converts pandas metadata to Spark DataFrame for compatibility."""
+        if name not in self.metadata or self.metadata[name].empty:
+            return self.spark.session.createDataFrame([], getattr(self.schema, name))
+        return self.spark.session.createDataFrame(self.metadata[name])
+        
     def load_all_dataframes(self):
-        """Loads all stock-related Parquet files into memory."""
+        """Loads all data files into memory."""
+        # Load regular data as Spark DataFrames
         self.dfs["stock_prices"] = self.load_parquet("stock_prices")
-        self.dfs["last_update"] = self.load_parquet("last_update")
-
+        
+        # Load metadata as pandas DataFrames
+        self.metadata["last_update"] = self.load_metadata("last_update")
+    
+    def update_metadata(self, pandas_data: pd.DataFrame, name: str):
+        """Updates metadata by combining with new data."""
+        if pandas_data.empty:
+            return
+            
+        if name == "last_update":
+            # Combine existing and new data
+            if self.metadata[name].empty:
+                combined_df = pandas_data
+            else:
+                combined_df = pd.concat([self.metadata[name], pandas_data])
+            
+            # Get most recent update date per symbol
+            updated_df = combined_df.groupby("symbol")["last_update"].max().reset_index()
+        else:
+            updated_df = pandas_data
+            
+        # Save to metadata CSV
+        csv_path = f"{self.config.metadata_path}{name}.csv"
+        updated_df.to_csv(csv_path, index=False)
+        
+        # Update in-memory dataframes
+        self.metadata[name] = updated_df
     def write_dataframe(self, df: Any, name: str):
         """Writes a Spark DataFrame to a Parquet file.
         
@@ -122,45 +160,17 @@ class DataStore:
             df (Any): Spark DataFrame to be written.
             name (str): Name of the Parquet file (without extension).
         """
-        if name == "last_update":
-            df.write.mode("append").parquet(f"{self.config.data_path}{name}.parquet")
-        else:
+        if not df.isEmpty():
             df.write.mode("append").partitionBy("symbol").parquet(f"{self.config.data_path}{name}.parquet")
 
+    # For backwards compatibility
     def accumulate_last_update(self, new_data: Any):
-        """Accumulates new stock update data before merging.
-        
-        Args:
-            new_data (Any): Spark DataFrame containing new update data.
-        """
-        if self.accumulated_last_update is None:
-            self.accumulated_last_update = new_data
-        else:
-            self.accumulated_last_update = self.accumulated_last_update.union(new_data)
-
+        """Legacy method for accumulating last_update data."""
+        self.update_metadata(new_data.toPandas(), "last_update")
+    
     def merge_last_update(self):
-        """Merge accumulated data into the last_update table"""
-        if self.accumulated_last_update is None:
-            return
-
-        # coalesce the accumulated data to reduce partitions
-        accumulated_df = self.accumulated_last_update.coalesce(8).alias("accumulated")
-        last_update_df = self.dfs["last_update"].alias("last_update")
-        
-        # combine all data (both existing and new)
-        all_symbols_df = accumulated_df.union(last_update_df).distinct()
-
-        deduped_df = all_symbols_df.groupBy("symbol").agg(
-            F.max("last_update").alias("last_update")
-        ).repartition(self.config.parallelism)  # Allow Spark to distribute workload better
-
-        
-        # Write the deduplicated DataFrame to the last_update table
-        deduped_df.write.mode("overwrite").parquet(f"{self.config.data_path}last_update.parquet")
-
-        # Reload the last_update DataFrame
-        self.dfs["last_update"] = self.load_parquet("last_update")
-        self.accumulated_last_update = None
+        """Legacy placeholder - updates happen immediately now."""
+        pass  # No operation needed as updates are immediate
         
 class StockDataFetcher:
     """Handles stock data fetching operations"""
@@ -276,7 +286,7 @@ class StockDataProcessor:
         self.logger = logger
         self.config = config
         self.processing_schema = processing_schema
-
+        
     def process_symbol_batch(self, symbol_batch: List[Tuple[str, bool]]):
         """Process symbols in batches while keeping distributed execution"""
         
@@ -289,8 +299,8 @@ class StockDataProcessor:
         
         # Create dataframe with symbols and join with last_update
         symbol_df = self.spark.session.createDataFrame(symbol_batch, ["symbol", "is_etf"])
-        last_update_df = self.data_store.dfs["last_update"]
-        symbol_with_last_update_df = symbol_df.join(last_update_df, "symbol", "left_outer")
+        last_update_spark_df = self.data_store.get_spark_metadata("last_update")
+        symbol_with_last_update_df = symbol_df.join(last_update_spark_df, "symbol", "left_outer")
         
         # Convert to RDD of symbol tuples
         symbol_rdd = symbol_with_last_update_df.rdd.map(
@@ -382,32 +392,17 @@ class StockDataProcessor:
             price_data (Any): Spark DataFrame containing price updates.
             last_update_data (Any): Spark DataFrame with last update records.
         """
-        # print(price_data.show(5))
-        # print(price_data.schema)
         if price_data.isEmpty():
             self.logger.info("No new price data to write")
             return
+            
         # Write price data first as it's always an append operation
         self.data_store.write_dataframe(price_data, 'stock_prices')
 
-        # Get reference to last_update table
-        last_update_table = self.data_store.dfs["last_update"]
-        
-        # If the last_update table is empty (first time), write all symbols
-        if last_update_table.isEmpty():
-            self.data_store.write_dataframe(last_update_data, 'last_update')
-        else:
-            # Split last_update_data into new and existing symbols
-            new_symbols_df = last_update_data.join(last_update_table, "symbol", "leftanti")
-            existing_symbols_df = last_update_data.join(last_update_table, "symbol", "semi")
-            
-            # Write new symbols directly
-            if not new_symbols_df.isEmpty():
-                self.data_store.write_dataframe(new_symbols_df, 'last_update')
-                
-            # Accumulate existing symbols for merge operation 
-            if not existing_symbols_df.isEmpty():
-                self.data_store.accumulate_last_update(existing_symbols_df)
+        # Update last_update metadata directly - no need for batching or accumulation
+        if not last_update_data.isEmpty():
+            pandas_last_update = last_update_data.toPandas()
+            self.data_store.update_metadata(pandas_last_update, 'last_update')
 
 class StockDataManager:
     """Main class that orchestrates the stock data operations"""
@@ -437,13 +432,20 @@ class StockDataManager:
             url = "http://www.nasdaqtrader.com/dynamic/SymDir/nasdaqtraded.txt"
             df = pd.read_csv(url, sep="|")
             df = df[df["Test Issue"] == "N"]
-            last_update_df = self.data_store.dfs["last_update"]
+            last_update_pd = self.data_store.metadata["last_update"]
 
-            outdated_symbols = last_update_df.filter(F.col("last_update") < F.lit(date.today())).select("symbol").distinct()
-            outdated_symbols_list = [row["symbol"] for row in outdated_symbols.collect()]
-            symbols_in_db = [row["symbol"] for row in last_update_df.select("symbol").distinct().collect()]
-
-            df = df[df["NASDAQ Symbol"].isin(outdated_symbols_list) | ~df["NASDAQ Symbol"].isin(symbols_in_db)]
+            if not last_update_pd.empty:
+                        # Get outdated symbols (those with last_update < today)
+                        outdated_symbols = last_update_pd[last_update_pd["last_update"] < date.today()]
+                        outdated_symbols_list = outdated_symbols["symbol"].tolist()
+                        
+                        # Get all symbols in database
+                        symbols_in_db = last_update_pd["symbol"].tolist()
+                        
+                        # Filter NASDAQ symbols
+                        df = df[df["NASDAQ Symbol"].isin(outdated_symbols_list) | 
+                                ~df["NASDAQ Symbol"].isin(symbols_in_db)]
+        
 
             # df = df.head(5)
             
