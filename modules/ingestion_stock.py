@@ -20,9 +20,6 @@ from configs.spark_config import SparkConfig
 from modules.sub_modules.spark_manager import SparkManager
 from modules.sub_modules.logger import Logger
 
-os.environ["PYSPARK_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
-os.environ["PYSPARK_DRIVER_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
-
 class DataSchema:
     """Defines schema for stock price and last update data."""
     

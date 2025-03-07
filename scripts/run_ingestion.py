@@ -11,6 +11,9 @@ from configs.spark_config import SparkConfig
 from modules.ingestion_stock import StockDataManager
 from modules.sub_modules.logger import Logger
 
+os.environ["PYSPARK_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
+os.environ["PYSPARK_DRIVER_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
+
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Run the stock data pipeline with optional Spark configuration.")
 
