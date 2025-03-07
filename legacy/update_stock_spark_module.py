@@ -1,4 +1,4 @@
-from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 import os
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -8,12 +8,9 @@ from datetime import date
 import time
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql import Window
-from pyspark.sql.types import StructType, StructField, StringType, DateType, FloatType, IntegerType, LongType
-from pyspark import SparkContext as sc
+from pyspark.sql.types import StructType, StructField, StringType, DateType, FloatType, LongType
 import logging
 from typing import Optional, Dict, List, Tuple, Any
-from dataclasses import dataclass, field
 from pandas_market_calendars import get_calendar
 import argparse
 from configs.processing_config import ProcessingConfig
@@ -624,6 +621,8 @@ def parse_arguments():
     return parser.parse_args()
 
 def main():
+    if not get_calendar("NASDAQ").valid_days(start_date=date.today(), end_date=date.today()):
+        print("Today's not trading day, skipping stock data update.")
     args = parse_arguments()
 
     # Load default SparkConfig
