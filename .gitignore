@@ -1,4 +1,4 @@
 stocks.db
 logs/
 alphavantage_key.txt
-fetch_data/raw_data/
+data/

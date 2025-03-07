@@ -1,56 +1,57 @@
-from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import pandas as pd
 import yfinance as yf
 from datetime import date
 import time
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql import Window
-from pyspark.sql.types import StructType, StructField, StringType, DateType, FloatType, IntegerType, LongType
-from pyspark import SparkContext as sc
+from pyspark.sql.types import StructType, StructField, StringType, DateType, FloatType, LongType
 import logging
 from typing import Optional, Dict, List, Tuple, Any
-from dataclasses import dataclass, field
 from pandas_market_calendars import get_calendar
 import argparse
+from configs.processing_config import ProcessingConfig
+from configs.spark_config import SparkConfig
 
 
 os.environ["PYSPARK_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
 os.environ["PYSPARK_DRIVER_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
-@dataclass
-class ProcessingConfig:
-    """Configuration settings for data processing"""
-    batch_size: int = 100
-    max_retries: int = 3
-    retry_delay: int = 5
-    data_path: str = "fetch_data/raw_data/parquets/"
-    log_path: str = "fetch_data/logs/update_log.txt"
-    log_max_bytes: int = 10 * 1024 * 1024
-    log_backup_count: int = 3
-    parallelism: int = 200
+# @dataclass
+# class ProcessingConfig:
+#     """Configuration settings for data processing"""
+#     batch_size: int = 100
+#     max_retries: int = 3
+#     retry_delay: int = 5
+#     data_path: str = "fetch_data/raw_data/parquets/"
+#     log_path: str = "fetch_data/logs/update_log.txt"
+#     log_max_bytes: int = 10 * 1024 * 1024
+#     log_backup_count: int = 3
+#     parallelism: int = 200
 
-@dataclass
-class SparkConfig:
-    """Configuration settings for Spark"""
-    app_name: str = "StocksX_Price_and_News_Influences"
-    arrow_enabled: bool = True
-    shuffle_partitions: int = 16
-    parallelism: int = 16
-    executor_memory: str = "5g"
-    driver_memory: str = "5g"
-    network_timeout: str = "800s"
-    heartbeat_interval: str = "600"
-    worker_timeout: str = "800"
-    lookup_timeout: str = "800"
-    ask_timeout: str = "800"
-    serializer: str = "org.apache.spark.serializer.KryoSerializer"
-    kryo_registration_required: str = "false"
-    master: str = "local[*]"
-    garbage_collectors: Dict[str, str] = field(default_factory=lambda: {
-        "spark.eventLog.gcMetrics.youngGenerationGarbageCollectors": "G1 Young Generation",
-        "spark.eventLog.gcMetrics.oldGenerationGarbageCollectors": "G1 Old Generation"
-    })
+# @dataclass
+# class SparkConfig:
+#     """Configuration settings for Spark"""
+#     app_name: str = "StocksX_Price_and_News_Influences"
+#     arrow_enabled: bool = True
+#     shuffle_partitions: int = 16
+#     parallelism: int = 16
+#     executor_memory: str = "5g"
+#     driver_memory: str = "5g"
+#     network_timeout: str = "800s"
+#     heartbeat_interval: str = "600"
+#     worker_timeout: str = "800"
+#     lookup_timeout: str = "800"
+#     ask_timeout: str = "800"
+#     serializer: str = "org.apache.spark.serializer.KryoSerializer"
+#     kryo_registration_required: str = "false"
+#     master: str = "local[*]"
+#     garbage_collectors: Dict[str, str] = field(default_factory=lambda: {
+#         "spark.eventLog.gcMetrics.youngGenerationGarbageCollectors": "G1 Young Generation",
+#         "spark.eventLog.gcMetrics.oldGenerationGarbageCollectors": "G1 Old Generation"
+#     })
 class SizeAndTimeRotatingFileHandler(TimedRotatingFileHandler):
     """Custom file handler that rotates logs based on both size and time."""
     def __init__(self, filename, when='midnight', interval=1, backupCount=0, encoding=None, delay=False, utc=False, maxBytes=0):
@@ -306,47 +307,72 @@ class StockDataFetcher:
         self.logger = logger
 
     @staticmethod
-    def fetch_stock_data(symbol_info: Tuple[str, str, Optional[date]], config: ProcessingConfig) -> Optional[pd.DataFrame]:
-        """
-        Fetches stock price data from Yahoo Finance.
-
-        Args:
-            symbol_info (Tuple[str, str, Optional[date]]): Stock symbol, ETF flag, and last update date.
-            config (ProcessingConfig): Config object for retries.
-            logger (Logger): Logger for logging errors.
-
-        Returns:
-            Optional[pd.DataFrame]: Pandas DataFrame with stock data, or None if fetching fails.
-        """
-        symbol, is_etf, last_update = symbol_info
-        period = "max" if last_update is None else f"{(date.today() - last_update).days}d"
-
-        for attempt in range(config['max_retries']):
-            try:
-                df = yf.download(symbol, period=period, interval="1d", progress=False, auto_adjust=True, group_by="column")
-                if df.empty:
-                    df = yf.download(symbol, period="1d", interval="1d", progress=False, auto_adjust=True)
-                    if df.empty:
-                        return None
-
-                df = df.reset_index()
-                df["symbol"] = symbol
-                df["is_etf"] = is_etf
-                # convrt Date to DateType
-                df["Date"] = pd.to_datetime(df["Date"]).dt.date
-
-                # Flatten MultiIndex columns
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = [col[0] for col in df.columns]
-
-                return df.to_dict(orient="records")
-
-            except Exception as e:
-                if attempt == config['max_retries'] - 1:
-                    return None
-                time.sleep(config['retry_delay'])
-
-        return None  # Should never reach here, but for safety
+    def fetch_stock_data_batch(symbols_batch: List[Tuple[str, bool, Optional[date]]], config: dict) -> List[dict]:
+        """Process a batch of symbols with one API call per period group"""
+        
+        # Group by period to minimize API calls
+        symbols_by_period = {}
+        for symbol, is_etf, last_update in symbols_batch:
+            if last_update is None:
+                period = "max"
+            else:
+                days = (date.today() - last_update).days
+                if days <= 0:  # Skip if already up to date
+                    continue
+                period = f"{days}d"
+                
+            if period not in symbols_by_period:
+                symbols_by_period[period] = []
+            symbols_by_period[period].append((symbol, is_etf))
+        
+        results = []
+        
+        # Process each period group with one API call
+        for period, symbols in symbols_by_period.items():
+            # Extract just the symbols
+            symbol_names = [s[0] for s in symbols]
+            symbol_dict = {s[0]: s[1] for s in symbols}  # Map symbol to is_etf
+            
+            # Try up to max_retries
+            for attempt in range(config['max_retries']):
+                try:
+                    # One API call for the whole batch
+                    multi_df = yf.download(
+                        symbol_names, 
+                        period=period, 
+                        interval="1d", 
+                        progress=False, 
+                        auto_adjust=True, 
+                        group_by="ticker"
+                    )
+                    multi_df.to_csv("fetch_data/raw_data/stock_data.csv")
+                    # Process each symbol from the result
+                    for symbol in symbol_names:
+                        if isinstance(multi_df.columns, pd.MultiIndex) and symbol in multi_df.columns.levels[0]:
+                            symbol_df = multi_df[symbol].reset_index()
+                            if not symbol_df.empty:
+                                symbol_df["symbol"] = symbol
+                                symbol_df["is_etf"] = symbol_dict[symbol]
+                                symbol_df["Date"] = symbol_df["Date"].apply(lambda x: x.date() if isinstance(x, pd.Timestamp) else x)
+                                # convert column to long
+                                symbol_df["Volume"] = symbol_df["Volume"].astype("Int64")
+                                # remove rows that Open  High  Low  Close  Volume are all NaN
+                                symbol_df.dropna(subset=["Open", "High", "Low", "Close", "Volume"], how="all", inplace=True)
+                                symbol_df.dropna(subset=["Date"], inplace=True)  # Drop rows where Date is NaN
+                                if symbol_df.empty:
+                                    continue
+                                results.extend(symbol_df.to_dict(orient="records"))
+                    
+                    break  # Success, exit retry loop
+                    
+                except Exception as e:
+                    if attempt == config['max_retries'] - 1:
+                        # All retries failed
+                        pass
+                    time.sleep(config['retry_delay'])
+        if not results:
+            print("⚠️ Warning: results is EMPTY after processing!")
+        return results
 
 
 class StockDataProcessor:
@@ -376,31 +402,55 @@ class StockDataProcessor:
         self.processing_schema = processing_schema
 
     def process_symbol_batch(self, symbol_batch: List[Tuple[str, bool]]):
-        """Processes a batch of stock symbols using Spark RDD."""
-
+        """Process symbols in batches while keeping distributed execution"""
+        
         config_dict = dict(
             max_retries=self.config.max_retries,
-            retry_delay=self.config.retry_delay)
+            retry_delay=self.config.retry_delay,
+            batch_size=50  # Recommended batch size for YF API
+        )
         config_broadcast = self.spark.session.sparkContext.broadcast(config_dict)
-
-
+        
+        # Create dataframe with symbols and join with last_update
         symbol_df = self.spark.session.createDataFrame(symbol_batch, ["symbol", "is_etf"])
         last_update_df = self.data_store.dfs["last_update"]
         symbol_with_last_update_df = symbol_df.join(last_update_df, "symbol", "left_outer")
-
-        symbol_rdd = symbol_with_last_update_df.rdd.map(lambda row: (row["symbol"], row["is_etf"], row["last_update"]))
-
-        # Don't pass `logger`, only use it on the driver
-        stock_data_rdd = symbol_rdd.flatMap(
-            lambda symbol_tuple: StockDataFetcher.fetch_stock_data(symbol_tuple, config_broadcast.value) or []
-        ).filter(lambda x: x is not None)
-
+        
+        # Convert to RDD of symbol tuples
+        symbol_rdd = symbol_with_last_update_df.rdd.map(
+            lambda row: (row["symbol"], row["is_etf"], row["last_update"])
+        )
+        
+        # Group into smaller batches within each partition
+        def process_partition(partition_iter):
+            partition_items = list(partition_iter)
+            batch_size = 50  # Yahoo Finance API works well with this batch size
+            results = []
+            
+            # Process in batches within this partition
+            for i in range(0, len(partition_items), batch_size):
+                batch = partition_items[i:i + batch_size]
+                batch_results = StockDataFetcher.fetch_stock_data_batch(batch, config_broadcast.value)
+                if batch_results:
+                    results.extend(batch_results)
+            return results
+        
+        # Process each partition in batches
+        stock_data_rdd = symbol_rdd.mapPartitions(process_partition)
 
         if stock_data_rdd.isEmpty():
-            self.logger.info("No new stock data to process.")  # Logging happens only on driver
+            self.logger.info("No new stock data to process.")
             return
+        # print(stock_data_rdd.take(5))  # Show first 5 records to check structure
 
-        spark_df = self.spark.session.createDataFrame(stock_data_rdd, schema=self.processing_schema.stock_prices_processing)
+        # Convert Date column to DateType explicitly
+        # stock_data_rdd = stock_data_rdd.filter(lambda x: x["Date"] is not None and isinstance(x["Date"], date))
+
+        spark_df = self.spark.session.createDataFrame(
+            stock_data_rdd, schema=self.processing_schema.stock_prices_processing
+        )
+        # print(spark_df.show(5))
+        # print(spark_df.schema)
         self._update_dataframes(spark_df)
 
 
@@ -423,6 +473,8 @@ class StockDataProcessor:
         Returns:
             Any: Processed Spark DataFrame with price data.
         """
+        # spark_df.printSchema()
+        # spark_df.show(5)
         return spark_df.select(
             F.upper(F.col("symbol")).alias("symbol"),
             F.col("Date").alias("trade_date"),
@@ -454,6 +506,8 @@ class StockDataProcessor:
             price_data (Any): Spark DataFrame containing price updates.
             last_update_data (Any): Spark DataFrame with last update records.
         """
+        # print(price_data.show(5))
+        # print(price_data.schema)
         if price_data.isEmpty():
             self.logger.info("No new price data to write")
             return
@@ -567,6 +621,8 @@ def parse_arguments():
     return parser.parse_args()
 
 def main():
+    if not get_calendar("NASDAQ").valid_days(start_date=date.today(), end_date=date.today()):
+        print("Today's not trading day, skipping stock data update.")
     args = parse_arguments()
 
     # Load default SparkConfig
