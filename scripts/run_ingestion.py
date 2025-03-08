@@ -1,5 +1,6 @@
 import os
 import sys
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import argparse
@@ -10,6 +11,8 @@ from pandas_market_calendars import get_calendar
 from configs.spark_config import SparkConfig
 from modules.ingestion_stock import StockDataManager
 from modules.sub_modules.logger import Logger
+from configs.processing_config import ProcessingConfig
+
 
 os.environ["PYSPARK_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
 os.environ["PYSPARK_DRIVER_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
@@ -38,7 +41,8 @@ def parse_arguments():
 def main():
     if not any(get_calendar("NASDAQ").valid_days(start_date=date.today(), end_date=date.today())):
         print("Today's not trading day, skipping stock data update.")
-        logger = Logger()
+        processing_config = ProcessingConfig()
+        logger = Logger(processing_config)
         logger.info("Today's not trading day, skipping stock data update.")
         return
     args = parse_arguments()
