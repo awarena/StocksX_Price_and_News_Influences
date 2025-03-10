@@ -10,11 +10,7 @@ from pyspark.sql import functions as F
 from pyspark.sql import Window
 from pyspark.sql.types import StructType, StructField, StringType, DateType, FloatType, IntegerType, LongType
 from pyspark import SparkContext as sc
-import logging
 from typing import Optional, Dict, List, Tuple, Any
-from dataclasses import dataclass, field
-from pandas_market_calendars import get_calendar
-import argparse
 from configs.processing_config import ProcessingConfig
 from configs.spark_config import SparkConfig
 from modules.sub_modules.spark_manager import SparkManager
@@ -160,8 +156,8 @@ class DataStore:
             df (Any): Spark DataFrame to be written.
             name (str): Name of the Parquet file (without extension).
         """
-        if not df.isEmpty():
-            df.write.mode("append").partitionBy("symbol").parquet(f"{self.config.data_path}{name}.parquet")
+
+        df.write.mode("append").partitionBy("symbol").parquet(f"{self.config.data_path}{name}.parquet")
 
     # For backwards compatibility
     def accumulate_last_update(self, new_data: Any):
@@ -196,7 +192,8 @@ class StockDataFetcher:
     @staticmethod
     def fetch_stock_data_batch(symbols_batch: List[Tuple[str, bool, Optional[date]]], config: dict) -> List[dict]:
         """Process a batch of symbols with one API call per period group"""
-        
+        processing_config = ProcessingConfig()
+        logger = Logger(processing_config)
         # Group by period to minimize API calls
         symbols_by_period = {}
         for symbol, is_etf, last_update in symbols_batch:
@@ -258,6 +255,7 @@ class StockDataFetcher:
                     time.sleep(config['retry_delay'])
         if not results:
             print("Warning: results is EMPTY after processing!")
+            logger.info("Warning: results is EMPTY after processing!")
         return results
 
 
@@ -298,9 +296,17 @@ class StockDataProcessor:
         config_broadcast = self.spark.session.sparkContext.broadcast(config_dict)
         
         # Create dataframe with symbols and join with last_update
-        symbol_df = self.spark.session.createDataFrame(symbol_batch, ["symbol", "is_etf"])
-        last_update_spark_df = self.data_store.get_spark_metadata("last_update")
-        symbol_with_last_update_df = symbol_df.join(last_update_spark_df, "symbol", "left_outer")
+        symbol_pd = pd.DataFrame(symbol_batch, columns=["symbol", "is_etf"])
+
+        # Join with pandas
+        symbol_with_last_update_pd = pd.merge(
+            symbol_pd, 
+            self.data_store.metadata["last_update"], 
+            on="symbol", 
+            how="left"
+        )
+
+        symbol_with_last_update_df = self.spark.session.createDataFrame(symbol_with_last_update_pd)
         
         # Convert to RDD of symbol tuples
         symbol_rdd = symbol_with_last_update_df.rdd.map(
@@ -323,10 +329,10 @@ class StockDataProcessor:
         
         # Process each partition in batches
         stock_data_rdd = symbol_rdd.mapPartitions(process_partition)
+        # if stock_data_rdd.isEmpty():
+        #     self.logger.info("No new stock data to process.")
+        #     return
 
-        if stock_data_rdd.isEmpty():
-            self.logger.info("No new stock data to process.")
-            return
         # print(stock_data_rdd.take(5))  # Show first 5 records to check structure
 
         # Convert Date column to DateType explicitly
@@ -371,19 +377,23 @@ class StockDataProcessor:
             F.col("Volume").alias("volume")
             ).join(self.data_store.dfs["stock_prices"], ["symbol", "trade_date"], "leftanti")
 
-    def _process_last_update_data(self, spark_df: Any) -> Any:
+    def _process_last_update_data(self, spark_df: Any) -> pd.DataFrame:
         """Processes last update information for stocks.
 
         Args:
             spark_df (Any): Spark DataFrame containing stock data.
 
         Returns:
-            Any: Spark DataFrame with last update details.
+            pd.DataFrame: Pandas DataFrame with last update details.
         """
-        return spark_df.select(
-            F.upper(F.col("symbol")).alias("symbol"),
-            F.lit(date.today()).alias("last_update")
-        ).distinct()
+        # Get unique symbols from the input DataFrame
+        symbols = [row.symbol.upper() for row in spark_df.select("symbol").distinct().collect()]
+        
+        # Create pandas DataFrame directly
+        return pd.DataFrame({
+            "symbol": symbols,
+            "last_update": [date.today()] * len(symbols)
+    })
 
     def _write_updates(self, price_data: Any, last_update_data: Any):
         """Writes updated stock data to storage.
@@ -392,17 +402,13 @@ class StockDataProcessor:
             price_data (Any): Spark DataFrame containing price updates.
             last_update_data (Any): Spark DataFrame with last update records.
         """
-        if price_data.isEmpty():
-            self.logger.info("No new price data to write")
-            return
             
-        # Write price data first as it's always an append operation
+        # Write price data
         self.data_store.write_dataframe(price_data, 'stock_prices')
 
         # Update last_update metadata directly - no need for batching or accumulation
-        if not last_update_data.isEmpty():
-            pandas_last_update = last_update_data.toPandas()
-            self.data_store.update_metadata(pandas_last_update, 'last_update')
+        if not last_update_data.empty:
+            self.data_store.update_metadata(last_update_data, 'last_update')
 
 class StockDataManager:
     """Main class that orchestrates the stock data operations"""

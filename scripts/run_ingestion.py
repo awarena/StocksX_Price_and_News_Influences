@@ -39,7 +39,7 @@ def parse_arguments():
     return parser.parse_args()
 
 def main():
-    if not any(get_calendar("NASDAQ").valid_days(start_date=date.today(), end_date=date.today())):
+    if any(get_calendar("NASDAQ").valid_days(start_date=date.today(), end_date=date.today())):
         print("Today's not trading day, skipping stock data update.")
         processing_config = ProcessingConfig()
         logger = Logger(processing_config)
