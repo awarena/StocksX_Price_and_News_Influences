@@ -11,4 +11,5 @@
 6. Add `%HADOOP_HOME%\bin` to `Path`
 ## Running Instructions
 1. Activate `tf270_stocks` environemnt.
-2. Run `run_ingestion.py`.
+2. CD to the project directory
+3. Run `python scripts/run_ingestion.py --iceberg_database "raw_data"`
