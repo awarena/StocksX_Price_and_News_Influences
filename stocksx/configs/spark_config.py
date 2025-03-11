@@ -8,8 +8,8 @@ class SparkConfig:
     arrow_enabled: bool = True
     shuffle_partitions: int = 16
     parallelism: int = 16
-    executor_memory: str = "5g"
-    driver_memory: str = "5g"
+    executor_memory: str = "8g"
+    driver_memory: str = "8g"
     network_timeout: str = "500s"
     heartbeat_interval: str = "30s"
     worker_timeout: str = "120s" 
