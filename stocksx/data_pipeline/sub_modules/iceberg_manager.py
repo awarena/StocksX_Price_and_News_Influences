@@ -26,6 +26,7 @@ class IcebergManager:
         self.schema = schema
         self.config = config
         self.catalog = getattr(spark_manager.config, 'iceberg_catalog', 'local')
+        self.database = getattr(spark_manager.config, 'iceberg_database', 'default')
         self.logger = Logger(config)
         
     def get_table_config(self, table_name: str) -> Dict[str, Any]:
@@ -71,7 +72,7 @@ class IcebergManager:
             table_config = self.get_table_config(table_name)
             
             # Start building SQL
-            sql_parts = [f"CREATE TABLE IF NOT EXISTS {self.catalog}.default.{table_name} ("]
+            sql_parts = [f"CREATE TABLE IF NOT EXISTS {self.catalog}.{self.database}.{table_name} ("]
             
             # Add columns
             columns = []
@@ -132,11 +133,11 @@ class IcebergManager:
         
         session = self.spark.session
         
-        # Ensure default namespace exists
-        session.sql(f"CREATE NAMESPACE IF NOT EXISTS {self.catalog}.default")
+        # Ensure namespace exists
+        session.sql(f"CREATE NAMESPACE IF NOT EXISTS {self.catalog}.{self.database}")
         
         # Check existing tables
-        tables_df = session.sql(f"SHOW TABLES IN {self.catalog}.default")
+        tables_df = session.sql(f"SHOW TABLES IN {self.catalog}.{self.database}")
         existing_tables = [row.tableName for row in tables_df.collect()]
         
         for table_name in tables_to_create:
@@ -161,10 +162,10 @@ class IcebergManager:
         try:
             # Use Iceberg's capabilities for different write modes
             if mode == "append":
-                df.writeTo(f"{self.catalog}.default.{table_name}").append()
+                df.writeTo(f"{self.catalog}.{self.database}.{table_name}").append()
                 self.logger.info(f"Appended data to {table_name}")
             elif mode == "overwrite":
-                df.writeTo(f"{self.catalog}.default.{table_name}").overwritePartitions()
+                df.writeTo(f"{self.catalog}.{self.database}.{table_name}").overwritePartitions()
                 self.logger.info(f"Overwrote partitions in {table_name}")
             elif mode == "merge":
                 # To be implemented
@@ -186,7 +187,7 @@ class IcebergManager:
             Spark DataFrame with table data or empty DataFrame if table doesn't exist
         """
         try:
-            return self.spark.session.table(f"{self.catalog}.default.{table_name}")
+            return self.spark.session.table(f"{self.catalog}.{self.database}.{table_name}")
         except Exception as e:
             self.logger.error(f"Error loading table {table_name}: {str(e)}")
             return self.spark.session.createDataFrame([], self.schema.get_schema(table_name))
@@ -201,7 +202,7 @@ class IcebergManager:
             True if successful, False otherwise
         """
         try:
-            self.spark.session.sql(f"DROP TABLE IF EXISTS {self.catalog}.default.{table_name}")
+            self.spark.session.sql(f"DROP TABLE IF EXISTS {self.catalog}.{self.database}.{table_name}")
             self.logger.info(f"Deleted table: {table_name}")
             return True
         except Exception as e:
@@ -220,7 +221,7 @@ class IcebergManager:
         try:
             # Get snapshot information
             snapshot_df = self.spark.session.sql(
-                f"SELECT * FROM {self.catalog}.default.{table_name}.snapshots"
+                f"SELECT * FROM {self.catalog}.{self.database}.{table_name}.snapshots"
             )
             snapshots = [{col: row[col] for col in snapshot_df.columns} 
                         for row in snapshot_df.collect()]

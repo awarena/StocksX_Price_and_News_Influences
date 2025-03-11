@@ -1,14 +1,9 @@
 import os
-import sys
 import pandas as pd
 import yfinance as yf
 from datetime import date
 import time
-from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql import Window
-from pyspark.sql.types import StructType, StructField, StringType, DateType, FloatType, IntegerType, LongType
-from pyspark import SparkContext as sc
 from typing import Optional, Dict, List, Tuple, Any
 
 from stocksx.configs.processing_config import ProcessingConfig

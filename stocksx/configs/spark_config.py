@@ -20,9 +20,10 @@ class SparkConfig:
     master: str = "local[*]"
     
     # Add Iceberg configuration
-    iceberg_enabled: bool = False
+    iceberg_enabled: bool = True
     iceberg_warehouse: str = "stocksx/data/iceberg_warehouse"
     iceberg_catalog: str = "local"
+    iceberg_database: str = "default"
 
     garbage_collectors: Dict[str, str] = field(default_factory=lambda: {
         "spark.eventLog.gcMetrics.youngGenerationGarbageCollectors": "G1 Young Generation",
