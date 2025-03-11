@@ -1,10 +1,9 @@
 import os
 import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from logging.handlers import TimedRotatingFileHandler
 import logging
-from configs.processing_config import ProcessingConfig
+from stocksx.configs.processing_config import ProcessingConfig
 
 class SizeAndTimeRotatingFileHandler(TimedRotatingFileHandler):
     """Custom file handler that rotates logs based on both size and time."""

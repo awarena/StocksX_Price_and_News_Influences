@@ -1,4 +1,3 @@
-stocks.db
-logs/
-alphavantage_key.txt
-data/
+stocksx/logs/
+stocksx/data/
+stocksx.egg-info/
