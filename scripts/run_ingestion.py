@@ -1,7 +1,5 @@
 import os
 import sys
-import tempfile
-import shutil
 import argparse
 from datetime import date
 
@@ -37,6 +35,9 @@ def parse_arguments():
     parser.add_argument("--kryo_registration_required", type=str, help="Require Kryo registration (True/False)")
     parser.add_argument("--master", type=str, help="Spark master (e.g., 'local[*]')")
     parser.add_argument("--iceberg_enabled", type=bool, help="Enable Apache Iceberg (True/False)")
+    parser.add_argument("--iceberg_warehouse", type=str, help="Iceberg warehouse path")
+    parser.add_argument("--iceberg_catalog", type=str, help="Iceberg catalog name")
+    parser.add_argument("--iceberg_database", type=str, help="Iceberg database name")
 
     return parser.parse_args()
 
@@ -71,6 +72,9 @@ def main():
         kryo_registration_required=args.kryo_registration_required if args.kryo_registration_required else default_config.kryo_registration_required,
         master=args.master if args.master else default_config.master,
         iceberg_enabled=args.iceberg_enabled if args.iceberg_enabled is not None else True,  # Default to True
+        iceberg_warehouse=args.iceberg_warehouse if args.iceberg_warehouse else default_config.iceberg_warehouse,
+        iceberg_catalog=args.iceberg_catalog if args.iceberg_catalog else default_config.iceberg_catalog,
+        iceberg_database=args.iceberg_database if args.iceberg_database else default_config.iceberg_database,
         garbage_collectors=default_config.garbage_collectors  # Retain default garbage collector settings
     )
 

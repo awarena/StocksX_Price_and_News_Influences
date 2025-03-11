@@ -53,7 +53,7 @@ class SparkManager:
                 builder = builder \
                     .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
                     .config("spark.sql.catalog.spark_catalog", "org.apache.iceberg.spark.SparkSessionCatalog") \
-                    .config("spark.sql.catalog.spark_catalog.type", "hive") \
+                    .config("spark.sql.catalog.spark_catalog.type", "hadoop") \
                     .config(f"spark.sql.catalog.{self.config.iceberg_catalog}", "org.apache.iceberg.spark.SparkCatalog") \
                     .config(f"spark.sql.catalog.{self.config.iceberg_catalog}.type", "hadoop") \
                     .config(f"spark.sql.catalog.{self.config.iceberg_catalog}.warehouse", self.config.iceberg_warehouse) \

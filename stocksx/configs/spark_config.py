@@ -8,8 +8,8 @@ class SparkConfig:
     arrow_enabled: bool = True
     shuffle_partitions: int = 16
     parallelism: int = 16
-    executor_memory: str = "5g"
-    driver_memory: str = "5g"
+    executor_memory: str = "8g"
+    driver_memory: str = "8g"
     network_timeout: str = "500s"
     heartbeat_interval: str = "30s"
     worker_timeout: str = "120s" 
@@ -20,9 +20,10 @@ class SparkConfig:
     master: str = "local[*]"
     
     # Add Iceberg configuration
-    iceberg_enabled: bool = False
+    iceberg_enabled: bool = True
     iceberg_warehouse: str = "stocksx/data/iceberg_warehouse"
     iceberg_catalog: str = "local"
+    iceberg_database: str = "default"
 
     garbage_collectors: Dict[str, str] = field(default_factory=lambda: {
         "spark.eventLog.gcMetrics.youngGenerationGarbageCollectors": "G1 Young Generation",

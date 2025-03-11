@@ -1,3 +1,8 @@
 stocksx/logs/
 stocksx/data/
 stocksx.egg-info/
+# Ignore all __pycache__ directories in the project
+**/__pycache__/
+*.py[cod]
+*$py.class
+
