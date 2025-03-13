@@ -37,7 +37,13 @@ def parse_arguments():
     parser.add_argument("--iceberg_enabled", type=bool, help="Enable Apache Iceberg (True/False)")
     parser.add_argument("--iceberg_warehouse", type=str, help="Iceberg warehouse path")
     parser.add_argument("--iceberg_catalog", type=str, help="Iceberg catalog name")
-    parser.add_argument("--iceberg_database", type=str, help="Iceberg database name")
+    parser.add_argument("--iceberg_namespace", type=str, help="Iceberg namespace name")
+    parser.add_argument("--hive_metastore_enabled", type=bool, help="Enable Hive metastore (True/False)")
+    parser.add_argument("--hive_metastore_host", type=str, help="Hive metastore host")
+    parser.add_argument("--hive_metastore_port", type=int, help="Hive metastore port")
+    parser.add_argument("--hive_metastore_db", type=str, help="Hive metastore database")
+    parser.add_argument("--hive_metastore_user", type=str, help="Hive metastore username")
+    parser.add_argument("--hive_metastore_password", type=str, help="Hive metastore password")
 
     return parser.parse_args()
 
@@ -74,7 +80,13 @@ def main():
         iceberg_enabled=args.iceberg_enabled if args.iceberg_enabled is not None else True,  # Default to True
         iceberg_warehouse=args.iceberg_warehouse if args.iceberg_warehouse else default_config.iceberg_warehouse,
         iceberg_catalog=args.iceberg_catalog if args.iceberg_catalog else default_config.iceberg_catalog,
-        iceberg_database=args.iceberg_database if args.iceberg_database else default_config.iceberg_database,
+        iceberg_namespace=args.iceberg_namespace if args.iceberg_namespace else default_config.iceberg_namespace,
+        hive_metastore_enabled=args.hive_metastore_enabled if args.hive_metastore_enabled is not None else default_config.hive_metastore_enabled,
+        hive_metastore_host=args.hive_metastore_host if args.hive_metastore_host else default_config.hive_metastore_host,
+        hive_metastore_port=args.hive_metastore_port if args.hive_metastore_port else default_config.hive_metastore_port,
+        hive_metastore_db=args.hive_metastore_db if args.hive_metastore_db else default_config.hive_metastore_db,
+        hive_metastore_user=args.hive_metastore_user if args.hive_metastore_user else default_config.hive_metastore_user,
+        hive_metastore_password=args.hive_metastore_password if args.hive_metastore_password else default_config.hive_metastore_password,
         garbage_collectors=default_config.garbage_collectors  # Retain default garbage collector settings
     )
 
