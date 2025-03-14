@@ -1,5 +1,5 @@
-stocksx/logs/
-stocksx/data/
+logs/
+data/
 stocksx.egg-info/
 # Ignore all __pycache__ directories in the project
 **/__pycache__/

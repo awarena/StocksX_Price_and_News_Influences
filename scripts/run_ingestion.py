@@ -2,16 +2,12 @@ import os
 import sys
 import argparse
 from datetime import date
-
 from pandas_market_calendars import get_calendar
 from stocksx.configs.spark_config import SparkConfig
-from stocksx.data_pipeline.ingestion_stock_iceberg import StockDataManager
-from stocksx.data_pipeline.sub_modules.logger import Logger
+from stocksx.data_pipeline.stocks_pipeline.ingestion_stock_iceberg import StockDataManager
+from stocksx.utils.logger import Logger
 from stocksx.configs.processing_config import ProcessingConfig
 
-# Set Python executable for Spark
-# os.environ["PYSPARK_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
-# os.environ["PYSPARK_DRIVER_PYTHON"] = "D:/Tools/anaconda3/envs/tf270_stocks/python.exe"
 os.environ["PYSPARK_PYTHON"] = sys.executable
 os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
@@ -44,6 +40,7 @@ def parse_arguments():
     parser.add_argument("--hive_metastore_db", type=str, help="Hive metastore database")
     parser.add_argument("--hive_metastore_user", type=str, help="Hive metastore username")
     parser.add_argument("--hive_metastore_password", type=str, help="Hive metastore password")
+    parser.add_argument("--hive_warehouse", type=str, help="Hive warehouse path")
 
     return parser.parse_args()
 
@@ -87,6 +84,7 @@ def main():
         hive_metastore_db=args.hive_metastore_db if args.hive_metastore_db else default_config.hive_metastore_db,
         hive_metastore_user=args.hive_metastore_user if args.hive_metastore_user else default_config.hive_metastore_user,
         hive_metastore_password=args.hive_metastore_password if args.hive_metastore_password else default_config.hive_metastore_password,
+        hive_warehouse=args.hive_warehouse if args.hive_warehouse else default_config.hive_warehouse,
         garbage_collectors=default_config.garbage_collectors  # Retain default garbage collector settings
     )
 

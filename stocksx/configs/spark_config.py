@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
-from typing import Dict
 import os
+from typing import Dict
 
 @dataclass
 class SparkConfig:
@@ -23,7 +23,7 @@ class SparkConfig:
     
     # Iceberg configuration
     iceberg_enabled: bool = True
-    iceberg_warehouse: str = "stocksx/data/iceberg_warehouse"
+    iceberg_warehouse: str = "data/warehouse/iceberg"
     iceberg_catalog: str = "spark_catalog"
     iceberg_namespace: str = "raw_data"
     
@@ -34,6 +34,8 @@ class SparkConfig:
     hive_metastore_db: str = "metastore"
     hive_metastore_user: str = "hive"
     hive_metastore_password: str = "password"
+    hive_warehouse: str ="data/warehouse/hive"
+
 
     # Garbage collector settings
     garbage_collectors: Dict[str, str] = field(default_factory=lambda: {
@@ -41,8 +43,3 @@ class SparkConfig:
         "spark.eventLog.gcMetrics.oldGenerationGarbageCollectors": "G1 Old Generation"
     })
     
-    # def __post_init__(self):
-    #     """Format paths and perform other post-initialization tasks."""
-    #     # Format iceberg_warehouse path
-    #     if not self.iceberg_warehouse.startswith("file:///"):
-    #         self.iceberg_warehouse = f"file:///{self.iceberg_warehouse.replace(os.sep, '/')}"

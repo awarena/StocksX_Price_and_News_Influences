@@ -9,7 +9,7 @@ from typing import Optional, Dict, List, Tuple, Any
 from stocksx.configs.processing_config import ProcessingConfig
 from stocksx.configs.spark_config import SparkConfig
 from stocksx.data_pipeline.sub_modules.spark_manager import SparkManager
-from stocksx.data_pipeline.sub_modules.logger import Logger
+from stocksx.utils.logger import Logger
 from stocksx.data_pipeline.sub_modules.schema import DataSchema
 from stocksx.data_pipeline.sub_modules.iceberg_manager import IcebergManager
   
@@ -400,6 +400,9 @@ class StockDataManager:
         
         # Initialize dataframes
         self.data_store.load_all_dataframes()
+
+        # Verify configuration
+        self.spark_manager.verify_configuration()
 
     def download_all_stock_data(self):
         """Download all stock data using Spark's native parallelism"""

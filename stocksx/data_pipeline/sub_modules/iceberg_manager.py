@@ -1,10 +1,7 @@
-import os
-import sys
-
 from typing import Dict, Any, List, Optional
 from stocksx.data_pipeline.sub_modules.schema import DataSchema
 from stocksx.data_pipeline.sub_modules.spark_manager import SparkManager
-from stocksx.data_pipeline.sub_modules.logger import Logger
+from stocksx.utils.logger import Logger
 from stocksx.configs.processing_config import ProcessingConfig
 
 
@@ -171,7 +168,7 @@ class IcebergManager:
                 # To be implemented
                 self.logger.error(f"Merge mode not implemented for {table_name}")
                 return False
-                
+
             return True
         except Exception as e:
             self.logger.error(f"Error writing to table {table_name}: {str(e)}")
