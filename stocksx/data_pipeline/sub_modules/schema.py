@@ -1,7 +1,7 @@
 import os
 import sys
 
-from stocksx.data_pipeline.sub_modules.logger import Logger
+from stocksx.utils.logger import Logger
 from stocksx.configs.processing_config import ProcessingConfig
 from pyspark.sql.types import StructType, StructField, StringType, DateType, FloatType, LongType, BooleanType
 
