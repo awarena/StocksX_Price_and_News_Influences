@@ -236,7 +236,6 @@ class IcebergManager:
             self.logger.error(f"Error getting snapshots for {table_name}: {str(e)}")
             return {"error": str(e)}
     
-    # Add to your IcebergManager class
     def register_existing_tables(self):
         """Register existing Iceberg tables in the warehouse directory."""
         import os
