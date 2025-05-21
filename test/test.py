@@ -1,4 +1,3 @@
-# In your notebook or script
 from stocksx.configs.spark_config import SparkConfig
 from stocksx.data_pipeline.sub_modules.spark_manager import SparkManager
 

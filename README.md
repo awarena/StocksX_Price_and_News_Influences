@@ -9,6 +9,13 @@
 4. Enter variable name as `HADOOP_HOME`, and set variable value to your hadoop binary folder. For example, `C:\hadoop-3.3.6`.
 5. Still under `System variables`, find and open `Path`
 6. Add `%HADOOP_HOME%\bin` to `Path`
+### Hive setup (For Windows only)
+1. Extract the `apache-hive-4.0.1-bin.zip` binary folder.
+2. Go to `Edit the system environment variables` -> `Environment Variables`
+3. Under `System variables`, click `New`
+4. Enter variable name as `HIVE_HOME`, and set variable value to your hive binary folder. For example, `C:\apache-hive-4.0.1-bin`.
+5. Still under `System variables`, find and open `Path`
+6. Add `%HIVE_HOME%\bin` to `Path`
 ## Running Instructions
 1. Activate `tf270_stocks` environemnt.
 2. CD to the project directory
