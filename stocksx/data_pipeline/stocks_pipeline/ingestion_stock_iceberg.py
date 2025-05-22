@@ -356,14 +356,12 @@ class StockDataProcessor:
             pd.DataFrame: Pandas DataFrame with last update details.
         """
         symbols = [row.symbol.upper() for row in spark_df.select("symbol").distinct().collect()]
-        # Fetch sector info for new symbols (implement fetch_sector_for_symbols as discussed)
-        from utils.sector_fetcher import fetch_sectors_spark
-        sector_df = fetch_sectors_spark(self.spark.session, symbols)
-
+        # Get current metadata as a dict for fast lookup
+        existing_metadata = self.data_store.metadata["metadata"].set_index("symbol")["sector"].to_dict()
         return pd.DataFrame({
             "symbol": symbols,
             "last_update": [date.today()] * len(symbols),
-            "sector": [sector_df.set_index("symbol").get("sector", {}).get(sym, None) for sym in symbols]
+            "sector": [existing_metadata.get(sym, None) for sym in symbols]
         })
 
     def _write_updates(self, price_data: Any, metadata: Any):
