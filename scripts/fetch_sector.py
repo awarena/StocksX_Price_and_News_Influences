@@ -15,7 +15,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import col
 from pyspark.sql import functions as F
 import time
-
+import random
 def main():
     spark_config = SparkConfig(iceberg_enabled=True, iceberg_namespace = "raw_data", 
                             iceberg_warehouse="data/warehouse/iceberg")
@@ -26,12 +26,13 @@ def main():
     i = 1
 
     while i !=0:
+        
         # wait 20 minutes before next iteration
-        time.sleep(20 * 60)
+        if i!= 1:
+            time.sleep(20 * (60 + random.randint(-10, 10)))
 
         # Load data from the local Iceberg warehouse
-        # Using the catalog.database.table format
-        spark_df = spark.read.format("iceberg").table("spark_catalog.raw_data.stock_prices")
+
         metadata = pd.read_csv("../data/metadata/stock_updates_metadata/metadata.csv")
         missing_sector = metadata[metadata["sector"].isnull() | metadata["sector"].eq("")]["symbol"].tolist()
         from stocksx.utils.sector_fetcher import fetch_sectors_spark
@@ -42,7 +43,7 @@ def main():
         # remove null and empty sectors
         sector_pd = sector_pd[~sector_pd["sector"].isnull() & ~sector_pd["sector"].eq("")]
 
-        i = sectpr_pd.shape[0]
+        i = sector_pd.shape[0]
         print(f"Found {i} missing sectors, updating metadata...")
 
         metadata = metadata.merge(
