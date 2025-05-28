@@ -53,6 +53,7 @@ def main():
         metadata = metadata.drop(columns=['sector_new'])
         # save metadata with sectors
         metadata.to_csv("../data/metadata/stock_updates_metadata/metadata.csv", index=False)
+        print(f"There are remaining {metadata['sector'].isnull().sum()} missing sectors in the metadata.")
 
 if __name__ == "__main__":
     main()
