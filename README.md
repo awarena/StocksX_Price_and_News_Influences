@@ -20,3 +20,5 @@
 1. Activate `tf270_stocks` environemnt.
 2. CD to the project directory
 3. Run `python scripts/run_ingestion.py --iceberg_namespace "raw_data"`
+
+*Note: Due to the usage of yfinance, metadata couldn't be downloaded in bulk and therefore has to be individual HTTP call. Because of this limitation, sector fetcher was not integrated into the data ingestion pipeline but instead in a separate optional notebook. (Will turn it into a script later)*

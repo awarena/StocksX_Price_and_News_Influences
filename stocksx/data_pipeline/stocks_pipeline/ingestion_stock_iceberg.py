@@ -50,7 +50,7 @@ class DataStore:
         self.dfs["stock_prices"] = self.iceberg.load_table("stock_prices")
         
         # Load metadata as before
-        self.metadata["last_update"] = self.load_metadata("last_update")
+        self.metadata["metadata"] = self.load_metadata("metadata")
     
         
     def load_metadata(self, name: str) -> pd.DataFrame:
@@ -65,8 +65,8 @@ class DataStore:
             return df
         else:
             # Return empty DataFrame with appropriate columns
-            if name == "last_update":
-                return pd.DataFrame(columns=["symbol", "last_update"])
+            if name == "metadata":
+                return pd.DataFrame(columns=["symbol", "last_update", "sector"])
             else:
                 return pd.DataFrame()
     
@@ -81,7 +81,7 @@ class DataStore:
         if pandas_data.empty:
             return
             
-        if name == "last_update":
+        if name == "metadata":
             # Combine existing and new data
             if self.metadata[name].empty:
                 combined_df = pandas_data
@@ -264,18 +264,18 @@ class StockDataProcessor:
         )
         config_broadcast = self.spark.session.sparkContext.broadcast(config_dict)
         
-        # Create dataframe with symbols and join with last_update
+        # Create dataframe with symbols and join with metadata
         symbol_pd = pd.DataFrame(symbol_batch, columns=["symbol", "is_etf"])
 
         # Join with pandas
-        symbol_with_last_update_pd = pd.merge(
+        symbol_with_metadata_pd = pd.merge(
             symbol_pd, 
-            self.data_store.metadata["last_update"], 
+            self.data_store.metadata["metadata"], 
             on="symbol", 
             how="left"
         )
 
-        symbol_with_last_update_df = self.spark.session.createDataFrame(symbol_with_last_update_pd).cache()
+        symbol_with_last_update_df = self.spark.session.createDataFrame(symbol_with_metadata_pd).cache()
         
         # Convert to RDD of symbol tuples
         symbol_rdd = symbol_with_last_update_df.rdd.map(
@@ -322,8 +322,8 @@ class StockDataProcessor:
             spark_df (Any): Spark DataFrame containing new stock data.
         """
         price_data = self._process_price_data(spark_df)
-        last_update_data = self._process_last_update_data(spark_df)
-        self._write_updates(price_data, last_update_data)
+        metadata = self._process_metadata_data(spark_df)
+        self._write_updates(price_data, metadata)
 
     def _process_price_data(self, spark_df: Any) -> Any:
         """Processes price data for stock updates.
@@ -346,8 +346,8 @@ class StockDataProcessor:
             F.col("Volume").alias("volume")
             ).join(self.data_store.dfs["stock_prices"], ["symbol", "trade_date"], "leftanti")
 
-    def _process_last_update_data(self, spark_df: Any) -> pd.DataFrame:
-        """Processes last update information for stocks.
+    def _process_metadata_data(self, spark_df: Any) -> pd.DataFrame:
+        """Processes metadata information for stocks.
 
         Args:
             spark_df (Any): Spark DataFrame containing stock data.
@@ -355,16 +355,16 @@ class StockDataProcessor:
         Returns:
             pd.DataFrame: Pandas DataFrame with last update details.
         """
-        # Get unique symbols from the input DataFrame
         symbols = [row.symbol.upper() for row in spark_df.select("symbol").distinct().collect()]
-        
-        # Create pandas DataFrame directly
+        # Get current metadata as a dict for fast lookup
+        existing_metadata = self.data_store.metadata["metadata"].set_index("symbol")["sector"].to_dict()
         return pd.DataFrame({
             "symbol": symbols,
-            "last_update": [date.today()] * len(symbols)
-    })
+            "last_update": [date.today()] * len(symbols),
+            "sector": [existing_metadata.get(sym, None) for sym in symbols]
+        })
 
-    def _write_updates(self, price_data: Any, last_update_data: Any):
+    def _write_updates(self, price_data: Any, metadata: Any):
         """Writes updated stock data to storage.
 
         Args:
@@ -376,8 +376,8 @@ class StockDataProcessor:
         self.data_store.write_dataframe(price_data, 'stock_prices')
 
         # Update last_update metadata directly - no need for batching or accumulation
-        if not last_update_data.empty:
-            self.data_store.update_metadata(last_update_data, 'last_update')
+        if not metadata.empty:
+            self.data_store.update_metadata(metadata, 'metadata')
 
 class StockDataManager:
     """Main class that orchestrates the stock data operations"""
@@ -410,15 +410,15 @@ class StockDataManager:
             url = "http://www.nasdaqtrader.com/dynamic/SymDir/nasdaqtraded.txt"
             df = pd.read_csv(url, sep="|")
             df = df[df["Test Issue"] == "N"]
-            last_update_pd = self.data_store.metadata["last_update"]
+            metadata_pd = self.data_store.metadata["metadata"]
 
-            if not last_update_pd.empty:
+            if not metadata_pd.empty:
                         # Get outdated symbols (those with last_update < today)
-                        outdated_symbols = last_update_pd[last_update_pd["last_update"] < date.today()]
+                        outdated_symbols = metadata_pd[metadata_pd["last_update"] < date.today()]
                         outdated_symbols_list = outdated_symbols["symbol"].tolist()
                         
                         # Get all symbols in database
-                        symbols_in_db = last_update_pd["symbol"].tolist()
+                        symbols_in_db = metadata_pd["symbol"].tolist()
                         
                         # Filter NASDAQ symbols
                         df = df[df["NASDAQ Symbol"].isin(outdated_symbols_list) | 
